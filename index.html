@@ -1,0 +1,1534 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Escalas - Igreja Apostólica Monte Sião</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; }
+  select option { background: #1e1b4b; color: white; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.5); border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="appRoot">
+  <div class="min-h-screen" style="background:linear-gradient(135deg,#0f172a,#1e1b4b,#0f172a);display:flex;align-items:center;justify-content:center">
+    <div style="color:white;text-align:center">
+      <div style="font-size:3rem">✝️</div>
+      <p style="color:#a5b4fc;font-size:0.875rem;margin-top:0.5rem">Carregando...</p>
+    </div>
+  </div>
+</div>
+<script type="module">
+
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection, doc, setDoc, getDoc, getDocs, addDoc, deleteDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyA0DgeVJoUv2oHRNGbeuoTlJwuvs1M1xJc",
+    authDomain: "escalamusicos-midia.firebaseapp.com",
+    projectId: "escalamusicos-midia",
+    storageBucket: "escalamusicos-midia.firebasestorage.app",
+    messagingSenderId: "748224799758",
+    appId: "1:748224799758:web:d7c91320e3e7be639f085f",
+    measurementId: "G-G157180RS0"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuth(app);
+
+  let currentUser = null;
+  let isAdmin = false;
+  let membros = [];
+  let instrumentos = ["Guitarra", "Violão", "Bateria", "Baixo"];
+  let funcoesM = ["Iluminação", "Projeção", "Live"];
+  let escalas = [];
+  let escalasMusicos = [];
+  let escalasMidia = [];
+  let musicas = [];
+  let tomsMap = {};
+  let currentView = "public";
+  let currentTab = "vocais";
+  let adminTab = "membros";
+  let editingEscalaId = null;
+  let editingEscalaMusicosId = null;
+  let editingEscalaMidiaId = null;
+  let editingMembroId = null;
+  let selectionState = { vocaisIds: [], midiaIds: [] };
+  let lastSavedEscalaId = null;
+
+  onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      currentUser = user;
+      const adminDoc = await getDoc(doc(db, "admins", user.uid));
+      isAdmin = adminDoc.exists();
+      await loadAll();
+      renderCurrentView();
+    } else {
+      currentUser = null;
+      isAdmin = false;
+      await loadAll();
+      document.getElementById("appRoot").innerHTML = renderLogin();
+    }
+  });
+
+  window.login = async () => {
+    const email = document.getElementById("loginEmail").value;
+    const pass = document.getElementById("loginPass").value;
+    const errEl = document.getElementById("loginErr");
+    errEl.textContent = "";
+    try {
+      await signInWithEmailAndPassword(auth, email, pass);
+    } catch(e) {
+      errEl.textContent = "Email ou senha inválidos.";
+    }
+  };
+
+  window.logout = async () => { await signOut(auth); };
+
+  async function loadAll() {
+    await Promise.all([loadMembros(), loadEscalas(), loadEscalasMusicos(), loadEscalasMidia(), loadMusicas(), loadToms()]);
+  }
+
+  async function loadMembros() {
+    const snap = await getDocs(collection(db, "membros"));
+    membros = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+
+  async function loadEscalas() {
+    const snap = await getDocs(query(collection(db, "escalas"), orderBy("dataFim", "desc")));
+    escalas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+
+  async function loadEscalasMusicos() {
+    try {
+      const snap = await getDocs(query(collection(db, "escalasMusicos"), orderBy("dataFim", "desc")));
+      escalasMusicos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch(e) { escalasMusicos = []; }
+  }
+
+  async function loadEscalasMidia() {
+    try {
+      const snap = await getDocs(query(collection(db, "escalasMidia"), orderBy("dataFim", "desc")));
+      escalasMidia = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch(e) { escalasMidia = []; }
+  }
+
+  async function loadMusicas() {
+    const snap = await getDocs(collection(db, "musicas"));
+    musicas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+
+  async function loadToms() {
+    const snap = await getDocs(collection(db, "toms"));
+    tomsMap = {};
+    snap.docs.forEach(d => { tomsMap[d.id] = d.data().tom; });
+  }
+
+  window.setView = (v) => { currentView = v; renderCurrentView(); };
+  window.setTab = (t) => { currentTab = t; renderCurrentView(); };
+  window.setAdminTab = (t) => { adminTab = t; renderCurrentView(); };
+
+  function renderCurrentView() {
+    const root = document.getElementById("appRoot");
+    if (currentView === "public") root.innerHTML = renderPublicView();
+    else if (currentView === "admin") root.innerHTML = renderAdminView();
+    else if (currentView === "sugestao") root.innerHTML = renderSugestaoView();
+    else if (currentView === "sugestao-midia") root.innerHTML = renderSugestaoMidiaView();
+    else if (currentView === "escala-edit") root.innerHTML = renderEscalaEditView();
+    else if (currentView === "escala-musicos-edit") root.innerHTML = renderEscalaMusicosEditView();
+    else if (currentView === "escala-midia-edit") root.innerHTML = renderEscalaMidiaEditView();
+    else if (currentView === "membro-edit") root.innerHTML = renderMembroEditView();
+  }
+
+  function renderLogin() {
+    return `
+    <div class="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-4">
+      <div class="bg-white/10 backdrop-blur-lg border border-white/20 rounded-2xl p-8 w-full max-w-md shadow-2xl">
+        <div class="text-center mb-8">
+          <div class="text-4xl mb-3">✝️</div>
+          <h1 class="text-2xl font-bold text-white">Monte Sião</h1>
+          <p class="text-indigo-300 text-sm mt-1">Sistema de Escalas</p>
+        </div>
+        <div class="space-y-4">
+          <input id="loginEmail" type="email" placeholder="Email do administrador"
+            class="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/40 focus:outline-none focus:border-indigo-400" />
+          <input id="loginPass" type="password" placeholder="Senha"
+            class="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder-white/40 focus:outline-none focus:border-indigo-400"
+            onkeydown="if(event.key==='Enter') login()" />
+          <p id="loginErr" class="text-red-400 text-sm"></p>
+          <button onclick="login()"
+            class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 rounded-xl transition">
+            Entrar como Administrador
+          </button>
+          <button onclick="goPublic()"
+            class="w-full bg-white/10 hover:bg-white/20 text-white py-3 rounded-xl transition text-sm">
+            Ver Escalas (Público)
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  window.goPublic = () => {
+    currentView = "public";
+    document.getElementById("appRoot").innerHTML = renderPublicView();
+  };
+
+  function renderHeader(backBtn) {
+    return `
+    <header class="bg-white/5 backdrop-blur border-b border-white/10 mb-6 sticky top-0 z-10">
+      <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          ${backBtn ? `<button onclick="${backBtn}" class="text-white/60 hover:text-white transition text-xl leading-none">←</button>` : ""}
+          <div>
+            <h1 class="text-white font-bold text-lg">✝️ Monte Sião</h1>
+            <p class="text-indigo-300 text-xs">Escalas de Louvor e Mídia</p>
+          </div>
+        </div>
+        <div class="flex gap-2 flex-wrap justify-end">
+          ${isAdmin ? `
+            <button onclick="setView('sugestao')" class="bg-amber-600 hover:bg-amber-500 text-white text-xs px-3 py-1.5 rounded-lg transition">💡 Sugestão</button>
+            <button onclick="setView('admin')" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1.5 rounded-lg transition">⚙️ Criar</button>
+            <button onclick="logout()" class="bg-white/10 hover:bg-white/20 text-white text-xs px-3 py-1.5 rounded-lg transition">Sair</button>
+          ` : `
+            <button onclick="document.getElementById('appRoot').innerHTML = renderLogin()"
+              class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1.5 rounded-lg transition">Admin</button>
+          `}
+        </div>
+      </div>
+    </header>`;
+  }
+
+  window.renderLogin = renderLogin;
+
+  // ===================== PUBLIC VIEW =====================
+  function renderPublicView() {
+    const tabs = ["vocais","musicos","midia"];
+    const tabLabels = { vocais: "🎤 Vocais", musicos: "🎸 Músicos", midia: "📸 Mídia" };
+    let content = "";
+    if (currentTab === "vocais") content = renderEscalaVocais();
+    else if (currentTab === "musicos") content = renderEscalaMusicos();
+    else content = renderEscalaMidia();
+
+    return `
+    <div class="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900">
+      ${renderHeader()}
+      <div class="max-w-5xl mx-auto px-4 pb-10">
+        <div class="flex gap-2 mb-6 overflow-x-auto pb-2">
+          ${tabs.map(t => `
+            <button onclick="setTab('${t}')"
+              class="flex-shrink-0 px-5 py-2.5 rounded-xl font-semibold text-sm transition
+              ${currentTab===t ? 'bg-indigo-600 text-white' : 'bg-white/10 text-white/70 hover:bg-white/20'}">
+              ${tabLabels[t]}
+            </button>`).join("")}
+        </div>
+        ${content}
+      </div>
+    </div>`;
+  }
+
+  function renderEscalaVocais() {
+    if (!escalas.length) return `<div class="text-white/40 text-center py-20">Nenhuma escala cadastrada ainda.</div>`;
+    return escalas.map(e => {
+      const cultosSab = e.tipoCultoSabado ? `<span class="text-xs bg-slate-700 text-white px-2 py-0.5 rounded-full">${e.tipoCultoSabado}</span>` : "";
+      const cultosDom = (e.tipoCultoDomingo||[]).map(c => `<span class="text-xs bg-indigo-600 text-white px-2 py-0.5 rounded-full">${c}</span>`).join(" ");
+      return `
+      <div class="bg-white/10 border border-white/20 rounded-2xl p-5 mb-4">
+        <div class="flex items-start justify-between mb-3 flex-wrap gap-2">
+          <div>
+            <div class="flex flex-wrap gap-1 mb-1">
+              ${cultosSab}${cultosDom}
+            </div>
+            <h3 class="text-white font-bold text-lg">${formatDateRange(e.dataInicio, e.dataFim)}</h3>
+          </div>
+          ${isAdmin ? `<button onclick="editEscala('${e.id}')" class="text-xs bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg">✏️ Editar</button>` : ""}
+        </div>
+        <div class="bg-white/5 rounded-xl p-3 mb-3">
+          <p class="text-indigo-300 text-xs mb-2">🎤 Vocais</p>
+          ${(e.vocaisIds||[]).map(id => {
+            const m = membros.find(m=>m.id===id);
+            return `<p class="text-white text-sm">${m ? m.nome : id}</p>`;
+          }).join("") || '<p class="text-white/40 text-sm">-</p>'}
+        </div>
+        ${(e.musicas||[]).length ? `
+        <div class="space-y-3">
+          <p class="text-indigo-300 text-xs font-semibold">🎵 Louvores</p>
+          ${(e.musicas||[]).map(mu => {
+            const principal = membros.find(m=>m.id===mu.vocalPrincipalId);
+            const tomKey = `${mu.musicaId || mu.titulo}_${mu.vocalPrincipalId}`;
+            const tom = tomsMap[tomKey] || mu.tom || "";
+            return `
+            <div class="bg-white/5 border border-white/10 rounded-xl p-3">
+              <p class="text-white font-semibold text-sm">${mu.titulo || "Sem título"}</p>
+              ${principal ? `<p class="text-indigo-300 text-xs mt-1">🎤 Principal: ${principal.nome}${tom ? ` · Tom: <span class="text-amber-400 font-bold">${tom}</span>` : ""}</p>` : ""}
+              ${mu.link ? `<a href="${mu.link}" target="_blank" class="text-blue-400 text-xs mt-1 block">🔗 Link</a>` : ""}
+              ${mu.observacoes ? `<p class="text-white/60 text-xs mt-1 italic">📝 ${mu.observacoes}</p>` : ""}
+            </div>`;
+          }).join("")}
+        </div>` : ""}
+        ${isAdmin ? `
+        <div class="mt-3 pt-3 border-t border-white/10">
+          <button onclick="gerarWhatsApp('${e.id}')" class="text-xs bg-green-700 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition">📱 WhatsApp Louvor</button>
+        </div>` : ""}
+      </div>`;
+    }).join("");
+  }
+
+  function renderEscalaMusicos() {
+    if (!escalasMusicos.length) return `<div class="text-white/40 text-center py-20">Nenhuma escala de músicos cadastrada.</div>`;
+    return escalasMusicos.map(e => {
+      const cultosSab = e.tipoCultoSabado ? `<span class="text-xs bg-slate-700 text-white px-2 py-0.5 rounded-full">${e.tipoCultoSabado}</span>` : "";
+      const cultosDom = (e.tipoCultoDomingo||[]).map(c => `<span class="text-xs bg-purple-600 text-white px-2 py-0.5 rounded-full">${c}</span>`).join(" ");
+      return `
+      <div class="bg-white/10 border border-white/20 rounded-2xl p-5 mb-4">
+        <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div>
+            <div class="flex flex-wrap gap-1 mb-1">${cultosSab}${cultosDom}</div>
+            <h3 class="text-white font-bold text-lg">${formatDateRange(e.dataInicio, e.dataFim)}</h3>
+          </div>
+          ${isAdmin ? `<button onclick="editEscalaMusicos('${e.id}')" class="text-xs bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg">✏️ Editar</button>` : ""}
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          ${(e.musicosEscala||[]).map(me => {
+            const m = membros.find(m=>m.id===me.membroId);
+            return `
+            <div class="bg-white/5 rounded-xl p-3">
+              <p class="text-white text-sm font-medium">${m ? m.nome : me.membroId}</p>
+              <p class="text-indigo-300 text-xs">${me.instrumento || ""}</p>
+            </div>`;
+          }).join("")}
+        </div>
+        ${isAdmin ? `
+        <div class="mt-3 pt-3 border-t border-white/10">
+          <button onclick="gerarWhatsAppMusicos('${e.id}')" class="text-xs bg-green-700 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition">📱 WhatsApp Músicos</button>
+        </div>` : ""}
+      </div>`;
+    }).join("");
+  }
+
+  function renderEscalaMidia() {
+    if (!escalasMidia.length) return `<div class="text-white/40 text-center py-20">Nenhuma escala de mídia cadastrada.</div>`;
+    return escalasMidia.map(e => {
+      const cultosSab = e.tipoCultoSabado ? `<span class="text-xs bg-slate-700 text-white px-2 py-0.5 rounded-full">${e.tipoCultoSabado}</span>` : "";
+      const cultosDom = (e.tipoCultoDomingo||[]).map(c => `<span class="text-xs bg-teal-700 text-white px-2 py-0.5 rounded-full">${c}</span>`).join(" ");
+      return `
+      <div class="bg-white/10 border border-white/20 rounded-2xl p-5 mb-4">
+        <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div>
+            <div class="flex flex-wrap gap-1 mb-1">${cultosSab}${cultosDom}</div>
+            <h3 class="text-white font-bold text-lg">${formatDateRange(e.dataInicio, e.dataFim)}</h3>
+          </div>
+          ${isAdmin ? `<button onclick="editEscalaMidia('${e.id}')" class="text-xs bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg">✏️ Editar</button>` : ""}
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          ${(e.midiaEscala||[]).map(me => {
+            const m = membros.find(m=>m.id===me.membroId);
+            return `<div class="bg-white/5 rounded-xl p-3">
+              <p class="text-white text-sm font-medium">${m ? m.nome : me.membroId}</p>
+              <p class="text-teal-300 text-xs">${me.funcao || ""}</p>
+            </div>`;
+          }).join("") || (e.midiaIds||[]).map(id => {
+            const m = membros.find(m=>m.id===id);
+            return `<div class="bg-white/5 rounded-xl p-3"><p class="text-white text-sm">${m ? m.nome : id}</p></div>`;
+          }).join("")}
+        </div>
+        ${isAdmin ? `
+        <div class="mt-3 pt-3 border-t border-white/10">
+          <button onclick="gerarWhatsAppMidia('${e.id}')" class="text-xs bg-green-700 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition">📱 WhatsApp Mídia</button>
+        </div>` : ""}
+      </div>`;
+    }).join("");
+  }
+
+  // ===================== ADMIN VIEW =====================
+  function renderAdminView() {
+    const tabs = [
+      { key: "membros", label: "👥 Membros" },
+      { key: "escalas", label: "📅 Escalas Louvor" },
+      { key: "escalas-musicos", label: "🎸 Escalas Músicos" },
+      { key: "escalas-midia", label: "📸 Escalas Mídia" },
+      { key: "musicas", label: "🎵 Louvores" },
+    ];
+    let content = "";
+    if (adminTab === "membros") content = renderAdminMembros();
+    else if (adminTab === "escalas") content = renderAdminEscalas();
+    else if (adminTab === "escalas-musicos") content = renderAdminEscalasMusicos();
+    else if (adminTab === "escalas-midia") content = renderAdminEscalasMidia();
+    else content = renderAdminMusicas();
+
+    return `
+    <div class="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900">
+      ${renderHeader("setView('public')")}
+      <div class="max-w-5xl mx-auto px-4 pb-10">
+        <div class="flex gap-2 mb-6 overflow-x-auto pb-2">
+          ${tabs.map(t => `
+            <button onclick="setAdminTab('${t.key}')"
+              class="flex-shrink-0 px-4 py-2.5 rounded-xl font-semibold text-sm transition
+              ${adminTab===t.key ? 'bg-indigo-600 text-white' : 'bg-white/10 text-white/70 hover:bg-white/20'}">
+              ${t.label}
+            </button>`).join("")}
+        </div>
+        ${content}
+      </div>
+    </div>`;
+  }
+
+  function renderAdminMembros() {
+    const louvor = membros.filter(m => m.equipe === "louvor");
+    const midia = membros.filter(m => m.equipe === "midia");
+    return `
+    <div>
+      <div class="bg-white/10 border border-white/20 rounded-2xl p-5 mb-6">
+        <h2 class="text-white font-bold mb-4">➕ Cadastrar Membro</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <input id="membroNome" placeholder="Nome completo" class="${iCls()}" />
+          <select id="membroEquipe" onchange="toggleLouvorOpts()" class="${iCls()}">
+            <option value="">Selecione a Equipe</option>
+            <option value="louvor">Louvor</option>
+            <option value="midia">Mídia</option>
+          </select>
+        </div>
+        <div id="louvorOpts" class="hidden mt-3 space-y-3">
+          <div class="flex gap-4 flex-wrap">
+            <label class="flex items-center gap-2 text-white text-sm cursor-pointer">
+              <input type="checkbox" id="isVocal" class="w-4 h-4 accent-indigo-500"> Vocal
+            </label>
+            <label class="flex items-center gap-2 text-white text-sm cursor-pointer">
+              <input type="checkbox" id="isMusico" onchange="toggleInstrOpts()" class="w-4 h-4 accent-indigo-500"> Músico
+            </label>
+          </div>
+          <div id="instrOpts" class="hidden">
+            <p class="text-white/60 text-xs mb-2">Instrumentos:</p>
+            <div class="flex flex-wrap gap-3">
+              ${instrumentos.map(i => `
+                <label class="flex items-center gap-2 text-white text-sm cursor-pointer">
+                  <input type="checkbox" name="instrumento" value="${i}" class="w-4 h-4 accent-indigo-500"> ${i}
+                </label>`).join("")}
+            </div>
+          </div>
+        </div>
+        <div id="midiaOpts" class="hidden mt-3">
+          <p class="text-white/60 text-xs mb-2">Funções na Mídia:</p>
+          <div class="flex flex-wrap gap-3">
+            ${funcoesM.map(f => `
+              <label class="flex items-center gap-2 text-white text-sm cursor-pointer">
+                <input type="checkbox" name="funcaoMidia" value="${f}" class="w-4 h-4 accent-teal-500"> ${f}
+              </label>`).join("")}
+          </div>
+        </div>
+        <button onclick="salvarMembro()" class="${bCls()} mt-4">Salvar Membro</button>
+      </div>
+      <div class="mb-6">
+        <h2 class="text-white font-bold mb-3">🎤 Equipe de Louvor (${louvor.length})</h2>
+        <div class="space-y-2">
+          ${louvor.map(m => `
+            <div class="bg-white/10 border border-white/10 rounded-xl p-3 flex items-center justify-between">
+              <div>
+                <p class="text-white font-medium text-sm">${m.nome}</p>
+                <p class="text-indigo-300 text-xs">
+                  ${m.isVocal ? "🎤 Vocal" : ""}${m.isVocal && m.isMusico ? " · " : ""}${m.isMusico ? "🎸 " + (m.instrumentos||[]).join(", ") : ""}
+                </p>
+              </div>
+              <div class="flex gap-1">
+                <button onclick="editMembro('${m.id}')" class="text-indigo-400 hover:text-indigo-300 text-xs px-2 py-1">✏️</button>
+                <button onclick="deletarMembro('${m.id}')" class="text-red-400 hover:text-red-300 text-xs px-2 py-1">🗑️</button>
+              </div>
+            </div>`).join("") || '<p class="text-white/40 text-sm py-2">Nenhum membro cadastrado.</p>'}
+        </div>
+      </div>
+      <div>
+        <h2 class="text-white font-bold mb-3">📸 Equipe de Mídia (${midia.length})</h2>
+        <div class="space-y-2">
+          ${midia.map(m => `
+            <div class="bg-white/10 border border-white/10 rounded-xl p-3 flex items-center justify-between">
+              <div>
+                <p class="text-white font-medium text-sm">${m.nome}</p>
+                <p class="text-teal-300 text-xs">${(m.funcoes||[]).join(", ") || "Sem função definida"}</p>
+              </div>
+              <div class="flex gap-1">
+                <button onclick="editMembro('${m.id}')" class="text-indigo-400 hover:text-indigo-300 text-xs px-2 py-1">✏️</button>
+                <button onclick="deletarMembro('${m.id}')" class="text-red-400 hover:text-red-300 text-xs px-2 py-1">🗑️</button>
+              </div>
+            </div>`).join("") || '<p class="text-white/40 text-sm py-2">Nenhum membro cadastrado.</p>'}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderAdminEscalas() {
+    return `
+    <div>
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-white font-bold">📅 Escalas de Louvor / Vocais</h2>
+        <button onclick="novaEscala()" class="${bCls()}">+ Nova Escala</button>
+      </div>
+      <div class="space-y-3">
+        ${escalas.map(e => `
+          <div class="bg-white/10 border border-white/20 rounded-2xl p-4 flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <p class="text-white font-medium text-sm">${formatDateRange(e.dataInicio, e.dataFim)}</p>
+              <p class="text-indigo-300 text-xs">${[e.tipoCultoSabado, ...(e.tipoCultoDomingo||[])].filter(Boolean).join(" · ") || "Sem tipo"}</p>
+            </div>
+            <div class="flex gap-2">
+              <button onclick="editEscala('${e.id}')" class="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg">✏️ Editar</button>
+              <button onclick="deletarEscala('${e.id}')" class="text-xs bg-red-800 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg">🗑️</button>
+            </div>
+          </div>`).join("") || '<p class="text-white/40">Nenhuma escala cadastrada.</p>'}
+      </div>
+    </div>`;
+  }
+
+  function renderAdminEscalasMusicos() {
+    return `
+    <div>
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-white font-bold">🎸 Escalas de Músicos</h2>
+        <button onclick="novaEscalaMusicos()" class="${bCls()}">+ Nova Escala</button>
+      </div>
+      <div class="space-y-3">
+        ${escalasMusicos.map(e => `
+          <div class="bg-white/10 border border-white/20 rounded-2xl p-4 flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <p class="text-white font-medium text-sm">${formatDateRange(e.dataInicio, e.dataFim)}</p>
+              <p class="text-purple-300 text-xs">${[e.tipoCultoSabado, ...(e.tipoCultoDomingo||[])].filter(Boolean).join(" · ") || "Sem tipo"}</p>
+            </div>
+            <div class="flex gap-2">
+              <button onclick="editEscalaMusicos('${e.id}')" class="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg">✏️ Editar</button>
+              <button onclick="deletarEscalaMusicos('${e.id}')" class="text-xs bg-red-800 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg">🗑️</button>
+            </div>
+          </div>`).join("") || '<p class="text-white/40">Nenhuma escala de músicos cadastrada.</p>'}
+      </div>
+    </div>`;
+  }
+
+  function renderAdminMusicas() {
+    const vocais = membros.filter(m => m.equipe === "louvor" && m.isVocal);
+    return `
+    <div>
+      <div class="bg-white/10 border border-white/20 rounded-2xl p-5 mb-6">
+        <h2 class="text-white font-bold mb-4">➕ Cadastrar Louvor</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <input id="musicaTitulo" placeholder="Título do louvor" class="${iCls()}" />
+          <input id="musicaArtista" placeholder="Artista / Ministério" class="${iCls()}" />
+        </div>
+        <div class="mt-3 bg-white/5 border border-white/10 rounded-xl p-3">
+          <p class="text-white/60 text-xs mb-2">🎵 Tom por Vocal <span class="text-white/30">(opcional — pode ser preenchido na escala também)</span></p>
+          <div id="tomVocalList" class="space-y-2">
+            ${vocais.map(v => `
+              <div class="flex items-center gap-2">
+                <span class="text-white text-xs w-28 truncate">${v.nome}</span>
+                <input id="tom_${v.id}" placeholder="Tom (ex: D, G, F#m)" class="flex-1 bg-white/10 border border-white/20 rounded-lg px-3 py-1.5 text-white text-xs placeholder-white/30 focus:outline-none focus:border-indigo-400" />
+              </div>`).join("") || '<p class="text-white/40 text-xs">Nenhum vocal cadastrado.</p>'}
+          </div>
+        </div>
+        <button onclick="salvarMusica()" class="${bCls()} mt-3">Salvar Louvor</button>
+      </div>
+      <h2 class="text-white font-bold mb-3">🎵 Louvores Cadastrados (${musicas.length})</h2>
+      <div class="space-y-2">
+        ${musicas.map(m => {
+          const tomsDoLouvor = Object.entries(tomsMap)
+            .filter(([k]) => k.startsWith(m.id + "_") || k.startsWith(m.titulo + "_"))
+            .map(([k, tom]) => {
+              const vocalId = k.split("_").slice(1).join("_");
+              const vocal = membros.find(mb => mb.id === vocalId);
+              return vocal ? `${vocal.nome}: <span class="text-amber-400">${tom}</span>` : null;
+            }).filter(Boolean);
+          return `
+          <div class="bg-white/10 border border-white/10 rounded-xl p-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-white text-sm font-medium">${m.titulo}</p>
+                <p class="text-white/50 text-xs">${m.artista || ""}</p>
+              </div>
+              <button onclick="deletarMusica('${m.id}')" class="text-red-400 text-xs px-2 py-1">🗑️</button>
+            </div>
+            ${tomsDoLouvor.length ? `<div class="mt-1 flex flex-wrap gap-2">${tomsDoLouvor.map(t => `<span class="text-white/50 text-xs bg-white/5 rounded-lg px-2 py-0.5">🎤 ${t}</span>`).join("")}</div>` : ""}
+          </div>`;
+        }).join("") || '<p class="text-white/40 text-sm">Nenhum louvor cadastrado.</p>'}
+      </div>
+    </div>`;
+  }
+
+  // ===================== ESCALA LOUVOR EDIT =====================
+  const cultosSabadoOpts = ["DIFLEN","Rede de Casais","Reunião de Homens","Reunião de Mulheres"];
+  const cultosDomingoOpts = ["Culto de Celebração","Culto de Ceia","Culto de Consagração"];
+
+  function renderDateCultoBlock(escala) {
+    return `
+    <div class="bg-white/10 border border-white/20 rounded-2xl p-5">
+      <h3 class="text-white font-semibold mb-3">📅 Fim de Semana</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-white/60 text-xs block mb-1">Sábado <span class="text-white/30">(opcional)</span></label>
+          <input type="date" id="dataInicio" value="${escala?.dataInicio || ""}" class="${iCls()}" />
+          <div class="mt-2 space-y-1">
+            <p class="text-white/60 text-xs mb-1">Culto do Sábado:</p>
+            ${cultosSabadoOpts.map(t => {
+              const checked = escala?.tipoCultoSabado === t ? "checked" : "";
+              return `<label class="flex items-center gap-2 text-white text-xs cursor-pointer">
+                <input type="radio" name="tipoCultoSabado" value="${t}" ${checked} class="w-3.5 h-3.5 accent-indigo-500"> ${t}
+              </label>`;
+            }).join("")}
+          </div>
+        </div>
+        <div>
+          <label class="text-white/60 text-xs block mb-1">Domingo <span class="text-red-400">*</span></label>
+          <input type="date" id="dataFim" value="${escala?.dataFim || ""}" class="${iCls()}" />
+          <div class="mt-2 space-y-1">
+            <p class="text-white/60 text-xs mb-1">Cultos do Domingo:</p>
+            ${cultosDomingoOpts.map(t => {
+              const checked = (escala?.tipoCultoDomingo||[]).includes(t) ? "checked" : "";
+              return `<label class="flex items-center gap-2 text-white text-xs cursor-pointer">
+                <input type="checkbox" name="tipoCultoDomingo" value="${t}" ${checked} class="w-3.5 h-3.5 accent-indigo-500"> ${t}
+              </label>`;
+            }).join("")}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderEscalaEditView() {
+    const escala = editingEscalaId ? escalas.find(e => e.id === editingEscalaId) : null;
+    const vocais = membros.filter(m => m.equipe === "louvor" && m.isVocal);
+
+    return `
+    <div class="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900">
+      ${renderHeader("setView('admin'); setAdminTab('escalas')")}
+      <div class="max-w-3xl mx-auto px-4 pb-10">
+        <h2 class="text-white font-bold text-xl mb-6">${escala ? "✏️ Editar Escala Louvor" : "➕ Nova Escala Louvor"}</h2>
+        <div class="space-y-5">
+
+          ${renderDateCultoBlock(escala)}
+
+          <div class="bg-white/10 border border-white/20 rounded-2xl p-5">
+            <h3 class="text-white font-semibold mb-3">🎤 Vocais <span class="text-white/40 text-xs font-normal">(até 4)</span></h3>
+            <div class="flex flex-wrap gap-2">
+              ${vocais.map(m => `
+                <button onclick="toggleSel('vocaisIds','${m.id}',this)"
+                  class="px-3 py-1.5 rounded-xl text-sm transition ${selectionState.vocaisIds.includes(m.id) ? 'bg-indigo-600 text-white' : 'bg-white/10 text-white/70'}">
+                  ${m.nome}
+                </button>`).join("") || '<p class="text-white/40 text-sm">Nenhum vocal cadastrado.</p>'}
+            </div>
+          </div>
+
+          <div class="bg-white/10 border border-white/20 rounded-2xl p-5">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-white font-semibold">🎵 Louvores da Escala</h3>
+              <button onclick="addMusicaRow()" class="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg transition">+ Adicionar</button>
+            </div>
+            <div id="musicasEscalaList">
+              ${(escala?.musicas||[]).map((mu, idx) => musicaRow(mu, idx)).join("")}
+            </div>
+          </div>
+
+          <button onclick="salvarEscala()" class="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition text-base">
+            💾 Salvar Escala
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ===================== ESCALA MÚSICOS EDIT =====================
+  function renderEscalaMusicosEditView() {
+    const escala = editingEscalaMusicosId ? escalasMusicos.find(e => e.id === editingEscalaMusicosId) : null;
+    const musicos = membros.filter(m => m.equipe === "louvor" && m.isMusico);
+    const escalaMusc = escala?.musicosEscala || [];
+
+    return `
+    <div class="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900">
+      ${renderHeader("setView('admin'); setAdminTab('escalas-musicos')")}
+      <div class="max-w-3xl mx-auto px-4 pb-10">
+        <h2 class="text-white font-bold text-xl mb-6">${escala ? "✏️ Editar Escala Músicos" : "➕ Nova Escala Músicos"}</h2>
+        <div class="space-y-5">
+
+          ${renderDateCultoBlock(escala)}
+
+          <div class="bg-white/10 border border-white/20 rounded-2xl p-5">
+            <h3 class="text-white font-semibold mb-3">🎸 Músicos</h3>
+            <div class="space-y-2">
+              ${musicos.map(m => {
+                const existing = escalaMusc.find(me => me.membroId === m.id);
+                const instr = m.instrumentos || [];
+                return `
+                <div class="bg-white/5 rounded-xl p-3 flex items-center gap-3 flex-wrap">
+                  <input type="checkbox" id="musico_${m.id}" ${existing ? "checked" : ""} class="w-4 h-4 accent-indigo-500">
+                  <label for="musico_${m.id}" class="text-white text-sm flex-1 cursor-pointer">${m.nome}</label>
+                  ${instr.length > 1 ? `
+                    <select id="instr_${m.id}" class="bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-white text-xs">
+                      ${instr.map(i => `<option value="${i}" ${existing?.instrumento===i?"selected":""}>${i}</option>`).join("")}
+                    </select>` : `
+                    <span class="text-indigo-300 text-xs">${instr[0] || ""}</span>
+                    <input type="hidden" id="instr_${m.id}" value="${instr[0] || ""}" />`}
+                </div>`;
+              }).join("") || '<p class="text-white/40 text-sm">Nenhum músico cadastrado.</p>'}
+            </div>
+          </div>
+
+          <button onclick="salvarEscalaMusicos()" class="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition text-base">
+            💾 Salvar Escala de Músicos
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderAdminEscalasMidia() {
+    return `
+    <div>
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-white font-bold">📸 Escalas de Mídia</h2>
+        <button onclick="novaEscalaMidia()" class="${bCls()}">+ Nova Escala</button>
+      </div>
+      <div class="space-y-3">
+        ${escalasMidia.map(e => `
+          <div class="bg-white/10 border border-white/20 rounded-2xl p-4 flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <p class="text-white font-medium text-sm">${formatDateRange(e.dataInicio, e.dataFim)}</p>
+              <p class="text-teal-300 text-xs">${[e.tipoCultoSabado, ...(e.tipoCultoDomingo||[])].filter(Boolean).join(" · ") || "Sem tipo"}</p>
+            </div>
+            <div class="flex gap-2">
+              <button onclick="editEscalaMidia('${e.id}')" class="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg">✏️ Editar</button>
+              <button onclick="deletarEscalaMidia('${e.id}')" class="text-xs bg-red-800 hover:bg-red-700 text-white px-3 py-1.5 rounded-lg">🗑️</button>
+            </div>
+          </div>`).join("") || '<p class="text-white/40">Nenhuma escala de mídia cadastrada.</p>'}
+      </div>
+    </div>`;
+  }
+
+  // ===================== ESCALA MÍDIA EDIT =====================
+  function renderEscalaMidiaEditView() {
+    const escala = editingEscalaMidiaId ? escalasMidia.find(e => e.id === editingEscalaMidiaId) : null;
+    const midiaMembros = membros.filter(m => m.equipe === "midia");
+    const midiaEscala = escala?.midiaEscala || [];
+
+    return `
+    <div class="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900">
+      ${renderHeader("setView('admin'); setAdminTab('escalas-midia')")}
+      <div class="max-w-3xl mx-auto px-4 pb-10">
+        <h2 class="text-white font-bold text-xl mb-6">${escala ? "✏️ Editar Escala Mídia" : "➕ Nova Escala Mídia"}</h2>
+        <div class="space-y-5">
+
+          ${renderDateCultoBlock(escala)}
+
+          <div class="bg-white/10 border border-white/20 rounded-2xl p-5">
+            <h3 class="text-white font-semibold mb-3">📸 Equipe de Mídia</h3>
+            <div class="space-y-2">
+              ${midiaMembros.map(m => {
+                const existing = midiaEscala.find(me => me.membroId === m.id);
+                const funcoes = m.funcoes || [];
+                return `
+                <div class="bg-white/5 rounded-xl p-3 flex items-center gap-3 flex-wrap">
+                  <input type="checkbox" id="midia_${m.id}" ${existing ? "checked" : ""} class="w-4 h-4 accent-teal-500">
+                  <label for="midia_${m.id}" class="text-white text-sm flex-1 cursor-pointer">${m.nome}</label>
+                  ${funcoes.length > 1 ? `
+                    <select id="funcao_${m.id}" class="bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-white text-xs">
+                      ${funcoes.map(f => `<option value="${f}" ${existing?.funcao===f?"selected":""}>${f}</option>`).join("")}
+                    </select>` : `
+                    <span class="text-teal-300 text-xs">${funcoes[0] || "Sem função"}</span>
+                    <input type="hidden" id="funcao_${m.id}" value="${funcoes[0] || ""}" />`}
+                </div>`;
+              }).join("") || '<p class="text-white/40 text-sm">Nenhum membro de mídia cadastrado.</p>'}
+            </div>
+          </div>
+
+          <button onclick="salvarEscalaMidia()" class="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition text-base">
+            💾 Salvar Escala de Mídia
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function musicaRow(mu, idx) {
+    const vocaisList = membros.filter(m => m.equipe === "louvor" && m.isVocal);
+    return `
+    <div class="bg-white/5 border border-white/10 rounded-xl p-3 mb-3" id="muRow_${idx}">
+      <div class="grid grid-cols-1 gap-2">
+        <select id="mu_musica_${idx}" class="${iCls('sm')}">
+          <option value="">Selecione louvor cadastrado</option>
+          ${musicas.map(m => `<option value="${m.id}" ${mu.musicaId===m.id?"selected":""}>${m.titulo}</option>`).join("")}
+          <option value="__novo__">+ Digitar título manualmente</option>
+        </select>
+        <input id="mu_titulo_${idx}" placeholder="Título do louvor" value="${mu.titulo||""}" class="${iCls('sm')}" />
+        <select id="mu_vocal_${idx}" class="${iCls('sm')}">
+          <option value="">Vocal Principal</option>
+          ${vocaisList.map(v => `<option value="${v.id}" ${mu.vocalPrincipalId===v.id?"selected":""}>${v.nome}</option>`).join("")}
+        </select>
+        <input id="mu_tom_${idx}" placeholder="Tom (Ex: D, G, Am, F#m)" value="${mu.tom||""}" class="${iCls('sm')}" />
+        <input id="mu_link_${idx}" placeholder="Link (YouTube, Google Drive...)" value="${mu.link||""}" class="${iCls('sm')}" />
+        <input id="mu_obs_${idx}" placeholder="Observações (opcional)" value="${mu.observacoes||""}" class="${iCls('sm')}" />
+        <button onclick="document.getElementById('muRow_${idx}').remove()" class="text-red-400 hover:text-red-300 text-xs self-start transition">🗑️ Remover</button>
+      </div>
+    </div>`;
+  }
+
+  window.addMusicaRow = () => {
+    const list = document.getElementById("musicasEscalaList");
+    const idx = Date.now();
+    list.insertAdjacentHTML("beforeend", musicaRow({}, idx));
+  };
+
+  // ===================== SUGESTÃO MÚSICOS =====================
+  function calcularSugestao() {
+    const musicos = membros.filter(m => m.equipe === "louvor" && m.isMusico);
+    const ultimas10 = escalasMusicos.filter(e => (e.musicosEscala||[]).length > 0).slice(0, 10);
+
+    const contagem = {};
+    musicos.forEach(m => contagem[m.id] = 0);
+    ultimas10.forEach(e => {
+      (e.musicosEscala||[]).forEach(me => {
+        if (contagem[me.membroId] !== undefined) contagem[me.membroId]++;
+      });
+    });
+
+    const contagemInstr = {};
+    musicos.forEach(m => {
+      contagemInstr[m.id] = {};
+      (m.instrumentos||[]).forEach(i => contagemInstr[m.id][i] = 0);
+    });
+    ultimas10.forEach(e => {
+      (e.musicosEscala||[]).forEach(me => {
+        if (contagemInstr[me.membroId] && me.instrumento) {
+          contagemInstr[me.membroId][me.instrumento] = (contagemInstr[me.membroId][me.instrumento] || 0) + 1;
+        }
+      });
+    });
+
+    const sugestao = {};
+    const jaAlocados = new Set();
+
+    instrumentos.forEach(instr => {
+      const aptos = musicos
+        .filter(m => (m.instrumentos||[]).includes(instr) && !jaAlocados.has(m.id))
+        .sort((a, b) => {
+          if (contagem[a.id] !== contagem[b.id]) return contagem[a.id] - contagem[b.id];
+          const aInstr = contagemInstr[a.id]?.[instr] || 0;
+          const bInstr = contagemInstr[b.id]?.[instr] || 0;
+          return aInstr - bInstr;
+        });
+
+      if (aptos.length > 0) {
+        const escolhido = aptos[0];
+        jaAlocados.add(escolhido.id);
+        sugestao[instr] = { membro: escolhido, instrumento: instr, participacoes: contagem[escolhido.id], folgas: ultimas10.length - contagem[escolhido.id] };
+      } else {
+        sugestao[instr] = null;
+      }
+    });
+
+    return { sugestao, contagem, musicos, ultimas10 };
+  }
+
+  // ===================== SUGESTÃO MÍDIA =====================
+  function calcularSugestaoMidia() {
+    const midiaMembros = membros.filter(m => m.equipe === "midia");
+    const ultimasEscalas = escalasMidia.filter(e => (e.midiaEscala||[]).length > 0).slice(0, 10);
+
+    const contagem = {};
+    midiaMembros.forEach(m => contagem[m.id] = 0);
+    ultimasEscalas.forEach(e => {
+      (e.midiaEscala||[]).forEach(me => {
+        if (contagem[me.membroId] !== undefined) contagem[me.membroId]++;
+      });
+    });
+
+    const contagemFuncao = {};
+    midiaMembros.forEach(m => {
+      contagemFuncao[m.id] = {};
+      (m.funcoes||[]).forEach(f => contagemFuncao[m.id][f] = 0);
+    });
+    ultimasEscalas.forEach(e => {
+      (e.midiaEscala||[]).forEach(me => {
+        if (contagemFuncao[me.membroId] && me.funcao) {
+          contagemFuncao[me.membroId][me.funcao] = (contagemFuncao[me.membroId][me.funcao] || 0) + 1;
+        }
+      });
+    });
+
+    const sugestao = {};
+    const jaAlocados = new Set();
+
+    funcoesM.forEach(funcao => {
+      const aptos = midiaMembros
+        .filter(m => (m.funcoes||[]).includes(funcao) && !jaAlocados.has(m.id))
+        .sort((a, b) => {
+          if (contagem[a.id] !== contagem[b.id]) return contagem[a.id] - contagem[b.id];
+          const aF = contagemFuncao[a.id]?.[funcao] || 0;
+          const bF = contagemFuncao[b.id]?.[funcao] || 0;
+          return aF - bF;
+        });
+
+      if (aptos.length > 0) {
+        const escolhido = aptos[0];
+        jaAlocados.add(escolhido.id);
+        sugestao[funcao] = { membro: escolhido, funcao, participacoes: contagem[escolhido.id], folgas: ultimasEscalas.length - contagem[escolhido.id] };
+      } else {
+        sugestao[funcao] = null;
+      }
+    });
+
+    return { sugestao, contagem, midiaMembros, ultimasEscalas };
+  }
+
+  function renderSugestaoView() {
+    const { sugestao, contagem, musicos, ultimas10 } = calcularSugestao();
+    const ordenados = [...musicos].sort((a,b) => contagem[a.id] - contagem[b.id]);
+
+    return `
+    <div class="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900">
+      ${renderHeader("setView('admin')")}
+      <div class="max-w-3xl mx-auto px-4 pb-10">
+        <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
+          <h2 class="text-white font-bold text-xl">💡 Escala Sugerida</h2>
+          <button onclick="setView('sugestao-midia')" class="bg-teal-700 hover:bg-teal-600 text-white text-xs px-4 py-2 rounded-xl transition">📸 Ver Sugestão Mídia</button>
+        </div>
+
+        <div class="bg-amber-900/30 border border-amber-500/30 rounded-2xl p-4 mb-6">
+          <p class="text-amber-300 text-sm">Baseado nas últimas <strong>${ultimas10.length}</strong> escalas de músicos. Faz rodízio automático de instrumentos.</p>
+        </div>
+
+        <div class="bg-white/10 border border-white/20 rounded-2xl p-5 mb-5">
+          <h3 class="text-white font-semibold mb-4">🎸 Sugestão por Instrumento</h3>
+          <div class="space-y-2 mb-5">
+            ${instrumentos.map(instr => {
+              const s = sugestao[instr];
+              return `
+              <div class="bg-white/5 rounded-xl p-3 flex items-center justify-between">
+                <span class="text-white/70 text-sm">${instr}</span>
+                <span class="text-white font-medium text-sm">${s ? s.membro.nome : "— sem músico disponível"}</span>
+              </div>`;
+            }).join("")}
+          </div>
+          <div class="flex gap-3 flex-wrap pt-3 border-t border-white/10">
+            <button onclick="aceitarSugestao()" class="flex-1 bg-green-700 hover:bg-green-600 text-white font-bold py-2.5 rounded-xl transition text-sm">
+              📱 Enviar via WhatsApp
+            </button>
+            <button onclick="aceitarESalvarSugestao()" class="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl transition text-sm">
+              💾 Criar Escala com Sugestão
+            </button>
+          </div>
+        </div>
+
+        <div class="bg-white/10 border border-white/20 rounded-2xl p-5">
+          <h3 class="text-white font-semibold mb-4">📊 Participações — Músicos (últimas ${ultimas10.length} escalas)</h3>
+          <div class="space-y-3">
+            ${ordenados.map(m => {
+              const p = contagem[m.id];
+              const folgas = ultimas10.length - p;
+              const pct = ultimas10.length > 0 ? Math.round((p / ultimas10.length) * 100) : 0;
+              return `
+              <div class="bg-white/5 rounded-xl p-3">
+                <div class="flex justify-between items-center mb-1">
+                  <span class="text-white text-sm font-medium">${m.nome}</span>
+                  <span class="text-white/50 text-xs">${p} presença${p!==1?"s":""} · ${folgas} folga${folgas!==1?"s":""}</span>
+                </div>
+                <div class="w-full bg-white/10 rounded-full h-1.5">
+                  <div class="bg-indigo-500 h-1.5 rounded-full" style="width:${pct}%"></div>
+                </div>
+              </div>`;
+            }).join("")}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderSugestaoMidiaView() {
+    const { sugestao, contagem, midiaMembros, ultimasEscalas } = calcularSugestaoMidia();
+    const ordenados = [...midiaMembros].sort((a,b) => contagem[a.id] - contagem[b.id]);
+
+    return `
+    <div class="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900">
+      ${renderHeader("setView('sugestao')")}
+      <div class="max-w-3xl mx-auto px-4 pb-10">
+        <h2 class="text-white font-bold text-xl mb-6">📸 Sugestão — Equipe de Mídia</h2>
+
+        <div class="bg-teal-900/30 border border-teal-500/30 rounded-2xl p-4 mb-6">
+          <p class="text-teal-300 text-sm">Baseado nas últimas <strong>${ultimasEscalas.length}</strong> escalas. Faz rodízio por função.</p>
+        </div>
+
+        <div class="bg-white/10 border border-white/20 rounded-2xl p-5 mb-5">
+          <h3 class="text-white font-semibold mb-4">📸 Sugestão por Função</h3>
+          <div class="space-y-2 mb-5">
+            ${funcoesM.map(funcao => {
+              const s = sugestao[funcao];
+              return `
+              <div class="bg-white/5 rounded-xl p-3 flex items-center justify-between">
+                <span class="text-white/70 text-sm">${funcao}</span>
+                <span class="text-white font-medium text-sm">${s ? s.membro.nome : "— sem membro disponível"}</span>
+              </div>`;
+            }).join("")}
+          </div>
+          <div class="pt-3 border-t border-white/10">
+            <button onclick="aceitarSugestaoMidia()" class="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-2.5 rounded-xl transition text-sm">
+              📱 Enviar Sugestão via WhatsApp
+            </button>
+          </div>
+        </div>
+
+        <div class="bg-white/10 border border-white/20 rounded-2xl p-5">
+          <h3 class="text-white font-semibold mb-4">📊 Participações — Mídia (últimas ${ultimasEscalas.length} escalas)</h3>
+          <div class="space-y-3">
+            ${ordenados.map(m => {
+              const p = contagem[m.id];
+              const folgas = ultimasEscalas.length - p;
+              const pct = ultimasEscalas.length > 0 ? Math.round((p / ultimasEscalas.length) * 100) : 0;
+              return `
+              <div class="bg-white/5 rounded-xl p-3">
+                <div class="flex justify-between items-center mb-1">
+                  <span class="text-white text-sm font-medium">${m.nome}</span>
+                  <span class="text-white/50 text-xs">${p} presença${p!==1?"s":""} · ${folgas} folga${folgas!==1?"s":""}</span>
+                </div>
+                <div class="w-full bg-white/10 rounded-full h-1.5">
+                  <div class="bg-teal-500 h-1.5 rounded-full" style="width:${pct}%"></div>
+                </div>
+              </div>`;
+            }).join("")}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ===================== MEMBRO EDIT =====================
+  function renderMembroEditView() {
+    const m = membros.find(mb => mb.id === editingMembroId);
+    if (!m) return `<div class="text-white p-10">Membro não encontrado.</div>`;
+
+    const isLouvor = m.equipe === "louvor";
+    const isMidia = m.equipe === "midia";
+
+    return `
+    <div class="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900">
+      ${renderHeader("setView('admin'); setAdminTab('membros')")}
+      <div class="max-w-xl mx-auto px-4 pb-10">
+        <h2 class="text-white font-bold text-xl mb-6">✏️ Editar Membro</h2>
+        <div class="bg-white/10 border border-white/20 rounded-2xl p-5 space-y-4">
+          <div>
+            <label class="text-white/60 text-xs block mb-1">Nome completo</label>
+            <input id="editNome" value="${m.nome}" class="${iCls()}" />
+          </div>
+          <div>
+            <label class="text-white/60 text-xs block mb-1">Equipe</label>
+            <select id="editEquipe" onchange="toggleEditOpts()" class="${iCls()}">
+              <option value="louvor" ${isLouvor?"selected":""}>Louvor</option>
+              <option value="midia" ${isMidia?"selected":""}>Mídia</option>
+            </select>
+          </div>
+
+          <div id="editLouvorOpts" class="${isMidia ? 'hidden' : ''} space-y-3">
+            <div class="flex gap-4 flex-wrap">
+              <label class="flex items-center gap-2 text-white text-sm cursor-pointer">
+                <input type="checkbox" id="editIsVocal" ${m.isVocal?"checked":""} class="w-4 h-4 accent-indigo-500"> Vocal
+              </label>
+              <label class="flex items-center gap-2 text-white text-sm cursor-pointer">
+                <input type="checkbox" id="editIsMusico" ${m.isMusico?"checked":""} onchange="toggleEditInstrOpts()" class="w-4 h-4 accent-indigo-500"> Músico
+              </label>
+            </div>
+            <div id="editInstrOpts" class="${m.isMusico ? '' : 'hidden'}">
+              <p class="text-white/60 text-xs mb-2">Instrumentos:</p>
+              <div class="flex flex-wrap gap-3">
+                ${instrumentos.map(i => `
+                  <label class="flex items-center gap-2 text-white text-sm cursor-pointer">
+                    <input type="checkbox" name="editInstrumento" value="${i}" ${(m.instrumentos||[]).includes(i)?"checked":""} class="w-4 h-4 accent-indigo-500"> ${i}
+                  </label>`).join("")}
+              </div>
+            </div>
+          </div>
+
+          <div id="editMidiaOpts" class="${isLouvor ? 'hidden' : ''} space-y-2">
+            <p class="text-white/60 text-xs mb-2">Funções na Mídia:</p>
+            <div class="flex flex-wrap gap-3">
+              ${funcoesM.map(f => `
+                <label class="flex items-center gap-2 text-white text-sm cursor-pointer">
+                  <input type="checkbox" name="editFuncaoMidia" value="${f}" ${(m.funcoes||[]).includes(f)?"checked":""} class="w-4 h-4 accent-teal-500"> ${f}
+                </label>`).join("")}
+            </div>
+          </div>
+
+          <button onclick="salvarEdicaoMembro()" class="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition">
+            💾 Salvar Alterações
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  window.toggleEditOpts = () => {
+    const eq = document.getElementById("editEquipe").value;
+    document.getElementById("editLouvorOpts").classList.toggle("hidden", eq !== "louvor");
+    document.getElementById("editMidiaOpts").classList.toggle("hidden", eq !== "midia");
+  };
+
+  window.toggleEditInstrOpts = () => {
+    document.getElementById("editInstrOpts").classList.toggle("hidden", !document.getElementById("editIsMusico").checked);
+  };
+
+  window.editMembro = (id) => {
+    editingMembroId = id;
+    currentView = "membro-edit";
+    renderCurrentView();
+  };
+
+  window.salvarEdicaoMembro = async () => {
+    const nome = document.getElementById("editNome").value.trim();
+    const equipe = document.getElementById("editEquipe").value;
+    if (!nome) return alert("Informe o nome.");
+    const data = { nome, equipe };
+    if (equipe === "louvor") {
+      data.isVocal = document.getElementById("editIsVocal").checked;
+      data.isMusico = document.getElementById("editIsMusico").checked;
+      data.instrumentos = data.isMusico
+        ? [...document.querySelectorAll("input[name='editInstrumento']:checked")].map(i => i.value)
+        : [];
+      data.funcoes = [];
+    }
+    if (equipe === "midia") {
+      data.funcoes = [...document.querySelectorAll("input[name='editFuncaoMidia']:checked")].map(i => i.value);
+      data.isVocal = false;
+      data.isMusico = false;
+      data.instrumentos = [];
+    }
+    await setDoc(doc(db, "membros", editingMembroId), data, { merge: true });
+    await loadMembros();
+    currentView = "admin";
+    adminTab = "membros";
+    renderCurrentView();
+  };
+
+  // ===================== ACTIONS =====================
+  window.toggleSel = (field, id, btn) => {
+    if (!selectionState[field]) selectionState[field] = [];
+    const idx = selectionState[field].indexOf(id);
+    if (idx === -1) {
+      if (field === "vocaisIds" && selectionState.vocaisIds.length >= 4) {
+        alert("Máximo de 4 vocais por escala.");
+        return;
+      }
+      selectionState[field].push(id);
+      if (field === "midiaIds") btn.className = btn.className.replace("bg-white/10 text-white/70", "bg-teal-600 text-white");
+      else btn.className = btn.className.replace("bg-white/10 text-white/70", "bg-indigo-600 text-white");
+    } else {
+      selectionState[field].splice(idx, 1);
+      btn.className = btn.className.replace("bg-indigo-600 text-white", "bg-white/10 text-white/70").replace("bg-teal-600 text-white", "bg-white/10 text-white/70");
+    }
+  };
+
+  window.toggleLouvorOpts = () => {
+    const eq = document.getElementById("membroEquipe").value;
+    document.getElementById("louvorOpts").classList.toggle("hidden", eq !== "louvor");
+    document.getElementById("midiaOpts").classList.toggle("hidden", eq !== "midia");
+  };
+
+  window.toggleInstrOpts = () => {
+    document.getElementById("instrOpts").classList.toggle("hidden", !document.getElementById("isMusico").checked);
+  };
+
+  window.salvarMembro = async () => {
+    const nome = document.getElementById("membroNome").value.trim();
+    const equipe = document.getElementById("membroEquipe").value;
+    if (!nome || !equipe) return alert("Preencha nome e equipe.");
+    const data = { nome, equipe, createdAt: new Date().toISOString() };
+    if (equipe === "louvor") {
+      data.isVocal = document.getElementById("isVocal")?.checked || false;
+      data.isMusico = document.getElementById("isMusico")?.checked || false;
+      if (data.isMusico) data.instrumentos = [...document.querySelectorAll("input[name='instrumento']:checked")].map(i => i.value);
+    }
+    if (equipe === "midia") {
+      data.funcoes = [...document.querySelectorAll("input[name='funcaoMidia']:checked")].map(i => i.value);
+    }
+    await addDoc(collection(db, "membros"), data);
+    await loadMembros();
+    document.getElementById("membroNome").value = "";
+    renderCurrentView();
+  };
+
+  window.deletarMembro = async (id) => {
+    if (!confirm("Remover este membro?")) return;
+    await deleteDoc(doc(db, "membros", id));
+    await loadMembros();
+    renderCurrentView();
+  };
+
+  window.salvarMusica = async () => {
+    const titulo = document.getElementById("musicaTitulo").value.trim();
+    const artista = document.getElementById("musicaArtista").value.trim();
+    if (!titulo) return alert("Informe o título do louvor.");
+    const ref = await addDoc(collection(db, "musicas"), { titulo, artista });
+    const vocais = membros.filter(m => m.equipe === "louvor" && m.isVocal);
+    for (const v of vocais) {
+      const tomEl = document.getElementById(`tom_${v.id}`);
+      const tom = tomEl ? tomEl.value.trim() : "";
+      if (tom) {
+        const key = `${ref.id}_${v.id}`;
+        await setDoc(doc(db, "toms", key), { tom, musicaId: ref.id, titulo, vocalPrincipalId: v.id });
+      }
+    }
+    await loadMusicas();
+    await loadToms();
+    document.getElementById("musicaTitulo").value = "";
+    document.getElementById("musicaArtista").value = "";
+    renderCurrentView();
+  };
+
+  window.deletarMusica = async (id) => {
+    if (!confirm("Remover este louvor?")) return;
+    await deleteDoc(doc(db, "musicas", id));
+    await loadMusicas();
+    renderCurrentView();
+  };
+
+  window.novaEscala = () => {
+    editingEscalaId = null;
+    selectionState = { vocaisIds: [] };
+    currentView = "escala-edit";
+    renderCurrentView();
+  };
+
+  window.editEscala = (id) => {
+    editingEscalaId = id;
+    const e = escalas.find(es => es.id === id);
+    selectionState = { vocaisIds: [...(e?.vocaisIds||[])] };
+    currentView = "escala-edit";
+    renderCurrentView();
+  };
+
+  window.deletarEscala = async (id) => {
+    if (!confirm("Remover esta escala?")) return;
+    await deleteDoc(doc(db, "escalas", id));
+    await loadEscalas();
+    renderCurrentView();
+  };
+
+  window.novaEscalaMusicos = () => {
+    editingEscalaMusicosId = null;
+    currentView = "escala-musicos-edit";
+    renderCurrentView();
+  };
+
+  window.editEscalaMusicos = (id) => {
+    editingEscalaMusicosId = id;
+    currentView = "escala-musicos-edit";
+    renderCurrentView();
+  };
+
+  window.deletarEscalaMusicos = async (id) => {
+    if (!confirm("Remover esta escala de músicos?")) return;
+    await deleteDoc(doc(db, "escalasMusicos", id));
+    await loadEscalasMusicos();
+    renderCurrentView();
+  };
+
+  window.novaEscalaMidia = () => {
+    editingEscalaMidiaId = null;
+    currentView = "escala-midia-edit";
+    renderCurrentView();
+  };
+
+  window.editEscalaMidia = (id) => {
+    editingEscalaMidiaId = id;
+    currentView = "escala-midia-edit";
+    renderCurrentView();
+  };
+
+  window.deletarEscalaMidia = async (id) => {
+    if (!confirm("Remover esta escala de mídia?")) return;
+    await deleteDoc(doc(db, "escalasMidia", id));
+    await loadEscalasMidia();
+    renderCurrentView();
+  };
+
+  window.salvarEscalaMidia = async () => {
+    const { dataInicio, dataFim, tipoCultoSabado, tipoCultoDomingo } = getDateCultoData();
+    if (!dataFim) return alert("Informe a data do Domingo (obrigatório).");
+
+    const midiaMembros = membros.filter(m => m.equipe === "midia");
+    const midiaEscala = [];
+    midiaMembros.forEach(m => {
+      const cb = document.getElementById(`midia_${m.id}`);
+      if (cb && cb.checked) {
+        const funcaoEl = document.getElementById(`funcao_${m.id}`);
+        midiaEscala.push({ membroId: m.id, funcao: funcaoEl ? funcaoEl.value : (m.funcoes||[])[0] || "" });
+      }
+    });
+
+    const data = {
+      dataInicio: dataInicio || dataFim,
+      dataFim,
+      tipoCultoSabado,
+      tipoCultoDomingo,
+      midiaEscala,
+      midiaIds: midiaEscala.map(m => m.membroId),
+      updatedAt: new Date().toISOString(),
+      updatedBy: currentUser?.uid || "",
+    };
+
+    let savedId = editingEscalaMidiaId;
+    if (editingEscalaMidiaId) {
+      await setDoc(doc(db, "escalasMidia", editingEscalaMidiaId), data, { merge: true });
+    } else {
+      const ref = await addDoc(collection(db, "escalasMidia"), data);
+      savedId = ref.id;
+    }
+
+    await loadEscalasMidia();
+    showSalvoModal(savedId, data, "midia");
+  };
+
+  function getDateCultoData() {
+    const dataInicio = document.getElementById("dataInicio").value;
+    const dataFim = document.getElementById("dataFim").value;
+    const radioSab = document.querySelector("input[name='tipoCultoSabado']:checked");
+    const tipoCultoSabado = radioSab ? radioSab.value : "";
+    const tipoCultoDomingo = [...document.querySelectorAll("input[name='tipoCultoDomingo']:checked")].map(c => c.value);
+    return { dataInicio, dataFim, tipoCultoSabado, tipoCultoDomingo };
+  }
+
+  window.salvarEscala = async () => {
+    const { dataInicio, dataFim, tipoCultoSabado, tipoCultoDomingo } = getDateCultoData();
+    if (!dataFim) return alert("Informe a data do Domingo (obrigatório).");
+
+    const musicasEscala = [];
+    document.querySelectorAll("[id^='muRow_']").forEach(row => {
+      const idx = row.id.replace("muRow_", "");
+      const musicaId = document.getElementById(`mu_musica_${idx}`)?.value || "";
+      const titulo = document.getElementById(`mu_titulo_${idx}`)?.value || "";
+      const vocalPrincipalId = document.getElementById(`mu_vocal_${idx}`)?.value || "";
+      const tom = document.getElementById(`mu_tom_${idx}`)?.value || "";
+      const link = document.getElementById(`mu_link_${idx}`)?.value || "";
+      const observacoes = document.getElementById(`mu_obs_${idx}`)?.value || "";
+      musicasEscala.push({ musicaId: musicaId !== "__novo__" ? musicaId : "", titulo, vocalPrincipalId, tom, link, observacoes });
+    });
+
+    for (const mu of musicasEscala) {
+      if (mu.vocalPrincipalId && mu.tom && (mu.musicaId || mu.titulo)) {
+        const key = `${mu.musicaId || mu.titulo}_${mu.vocalPrincipalId}`;
+        await setDoc(doc(db, "toms", key), { tom: mu.tom, musicaId: mu.musicaId, titulo: mu.titulo, vocalPrincipalId: mu.vocalPrincipalId });
+      }
+    }
+
+    const data = {
+      dataInicio: dataInicio || dataFim,
+      dataFim,
+      tipoCultoSabado,
+      tipoCultoDomingo,
+      vocaisIds: selectionState.vocaisIds,
+      musicas: musicasEscala,
+      updatedAt: new Date().toISOString(),
+      updatedBy: currentUser?.uid || "",
+    };
+
+    let savedId = editingEscalaId;
+    if (editingEscalaId) {
+      await setDoc(doc(db, "escalas", editingEscalaId), data, { merge: true });
+    } else {
+      const ref = await addDoc(collection(db, "escalas"), data);
+      savedId = ref.id;
+    }
+
+    await loadEscalas();
+    await loadToms();
+    lastSavedEscalaId = savedId;
+    showSalvoModal(savedId, data, "louvor");
+  };
+
+  window.salvarEscalaMusicos = async () => {
+    const { dataInicio, dataFim, tipoCultoSabado, tipoCultoDomingo } = getDateCultoData();
+    if (!dataFim) return alert("Informe a data do Domingo (obrigatório).");
+
+    const musicos = membros.filter(m => m.equipe === "louvor" && m.isMusico);
+    const musicosEscala = [];
+    musicos.forEach(m => {
+      const cb = document.getElementById(`musico_${m.id}`);
+      if (cb && cb.checked) {
+        const instrEl = document.getElementById(`instr_${m.id}`);
+        musicosEscala.push({ membroId: m.id, instrumento: instrEl ? instrEl.value : (m.instrumentos||[])[0] || "" });
+      }
+    });
+
+    const data = {
+      dataInicio: dataInicio || dataFim,
+      dataFim,
+      tipoCultoSabado,
+      tipoCultoDomingo,
+      musicosEscala,
+      musicosIds: musicosEscala.map(m => m.membroId),
+      updatedAt: new Date().toISOString(),
+      updatedBy: currentUser?.uid || "",
+    };
+
+    let savedId = editingEscalaMusicosId;
+    if (editingEscalaMusicosId) {
+      await setDoc(doc(db, "escalasMusicos", editingEscalaMusicosId), data, { merge: true });
+    } else {
+      const ref = await addDoc(collection(db, "escalasMusicos"), data);
+      savedId = ref.id;
+    }
+
+    await loadEscalasMusicos();
+    showSalvoModal(savedId, data, "musicos");
+  };
+
+  function showSalvoModal(escalaId, data, tipo) {
+    const modal = document.createElement("div");
+    modal.id = "salvoModal";
+    modal.className = "fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4";
+    let botoes = "";
+    if (tipo === "musicos") {
+      botoes = (data.musicosEscala||[]).length ? `
+        <button onclick="gerarWhatsAppMusicos('${escalaId}'); fecharModal()" class="w-full bg-green-700 hover:bg-green-600 text-white py-2.5 rounded-xl text-sm font-semibold transition">
+          📱 WhatsApp — Escala de Músicos
+        </button>` : "";
+    } else if (tipo === "midia") {
+      botoes = (data.midiaEscala||[]).length ? `
+        <button onclick="gerarWhatsAppMidia('${escalaId}'); fecharModal()" class="w-full bg-green-700 hover:bg-green-600 text-white py-2.5 rounded-xl text-sm font-semibold transition">
+          📱 WhatsApp — Equipe de Mídia
+        </button>` : "";
+    } else {
+      botoes = (data.vocaisIds||[]).length || (data.musicas||[]).length ? `
+        <button onclick="gerarWhatsApp('${escalaId}'); fecharModal()" class="w-full bg-green-700 hover:bg-green-600 text-white py-2.5 rounded-xl text-sm font-semibold transition">
+          📱 WhatsApp — Escala de Louvor
+        </button>` : "";
+    }
+    const tabBack = tipo === "musicos" ? "escalas-musicos" : tipo === "midia" ? "escalas-midia" : "escalas";
+    modal.innerHTML = `
+      <div class="bg-slate-800 border border-white/20 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+        <div class="text-center mb-5">
+          <div class="text-4xl mb-2">✅</div>
+          <h3 class="text-white font-bold text-lg">Escala Salva!</h3>
+          <p class="text-white/50 text-sm mt-1">${formatDateRange(data.dataInicio, data.dataFim)}</p>
+        </div>
+        <div class="space-y-3">
+          <p class="text-white/60 text-xs text-center">Deseja enviar por WhatsApp?</p>
+          ${botoes}
+          <button onclick="fecharModal(); setView('admin'); setAdminTab('${tabBack}')" class="w-full bg-white/10 hover:bg-white/20 text-white py-2.5 rounded-xl text-sm transition">
+            Fechar
+          </button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+
+  window.fecharModal = () => {
+    const modal = document.getElementById("salvoModal");
+    if (modal) modal.remove();
+  };
+
+  window.aceitarSugestao = () => {
+    const { sugestao } = calcularSugestao();
+    const musicosEscala = instrumentos.filter(i => sugestao[i]).map(i => ({ membroId: sugestao[i].membro.id, instrumento: i }));
+    let txt = `*ESCALA DE MÚSICOS - MONTE SIÃO*\n\n *MÚSICOS*\n`;
+    musicosEscala.forEach(me => { const m = membros.find(m => m.id === me.membroId); if (m) txt += `• ${m.nome} — ${me.instrumento}\n`; });
+    txt += `\n_Sugestão gerada pelo sistema Monte Sião_`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, "_blank");
+  };
+
+  window.aceitarESalvarSugestao = () => {
+    const { sugestao } = calcularSugestao();
+    const musicosEscala = instrumentos.filter(i => sugestao[i]).map(i => ({ membroId: sugestao[i].membro.id, instrumento: i }));
+    editingEscalaMusicosId = null;
+    currentView = "escala-musicos-edit";
+    window._sugestaoMusicos = musicosEscala;
+    renderCurrentView();
+    setTimeout(() => {
+      musicosEscala.forEach(me => {
+        const cb = document.getElementById(`musico_${me.membroId}`);
+        if (cb) cb.checked = true;
+        const sel = document.getElementById(`instr_${me.membroId}`);
+        if (sel) sel.value = me.instrumento;
+      });
+    }, 50);
+  };
+
+  window.aceitarSugestaoMidia = () => {
+    const { sugestao } = calcularSugestaoMidia();
+    let txt = `*SUGESTÃO EQUIPE DE MÍDIA - MONTE SIÃO*\n\n *MÍDIA*\n`;
+    funcoesM.forEach(f => { const s = sugestao[f]; if (s) txt += `• ${s.membro.nome} — ${f}\n`; });
+    txt += `\n_Sugestão gerada pelo sistema Monte Sião_`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, "_blank");
+  };
+
+  window.gerarWhatsApp = (escalaId) => {
+    const e = escalas.find(es => es.id === escalaId);
+    if (!e) return;
+    let txt = `*ESCALA DE LOUVOR - MONTE SIÃO*\n*${formatDateRange(e.dataInicio, e.dataFim)}*\n`;
+    const cultos = [e.tipoCultoSabado ? `Sáb: ${e.tipoCultoSabado}` : null, ...(e.tipoCultoDomingo||[]).map(c => `Dom: ${c}`)].filter(Boolean);
+    if (cultos.length) txt += `${cultos.join(" | ")}\n`;
+    txt += `\n *VOCAIS*\n`;
+    (e.vocaisIds||[]).forEach(id => { const m = membros.find(m=>m.id===id); if (m) txt += `• ${m.nome}\n`; });
+    if ((e.musicas||[]).length) {
+      txt += `\n *LOUVORES*\n`;
+      e.musicas.forEach(mu => {
+        txt += `\n *${mu.titulo || "Louvor"}*\n`;
+        if (mu.vocalPrincipalId) {
+          const vp = membros.find(m=>m.id===mu.vocalPrincipalId);
+          if (vp) txt += `  🎤 Principal: ${vp.nome}`;
+          if (mu.tom) txt += ` | Tom: ${mu.tom}`;
+          txt += "\n";
+        }
+        if (mu.link) txt += `  🔗 ${mu.link}\n`;
+        if (mu.observacoes) txt += `   ${mu.observacoes}\n`;
+      });
+    }
+    txt += `\n_Sistema de Escalas - Monte Sião_`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, "_blank");
+  };
+
+  window.gerarWhatsAppMusicos = (escalaId) => {
+    const e = escalasMusicos.find(es => es.id === escalaId);
+    if (!e) return;
+    let txt = `*ESCALA DE MÚSICOS - MONTE SIÃO*\n*${formatDateRange(e.dataInicio, e.dataFim)}*\n`;
+    const cultos = [e.tipoCultoSabado ? `Sáb: ${e.tipoCultoSabado}` : null, ...(e.tipoCultoDomingo||[]).map(c => `Dom: ${c}`)].filter(Boolean);
+    if (cultos.length) txt += `${cultos.join(" | ")}\n`;
+    txt += `\n*MÚSICOS*\n`;
+    (e.musicosEscala||[]).forEach(me => { const m = membros.find(m=>m.id===me.membroId); if (m) txt += `• ${m.nome} — ${me.instrumento}\n`; });
+    txt += `\n_Sistema de Escalas - Monte Sião_`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, "_blank");
+  };
+
+  window.gerarWhatsAppMidia = (escalaId) => {
+    const e = escalasMidia.find(es => es.id === escalaId);
+    if (!e) return;
+    let txt = `*EQUIPE DE MÍDIA - MONTE SIÃO*\n*${formatDateRange(e.dataInicio, e.dataFim)}*\n`;
+    const cultos = [e.tipoCultoSabado ? `Sáb: ${e.tipoCultoSabado}` : null, ...(e.tipoCultoDomingo||[]).map(c => `Dom: ${c}`)].filter(Boolean);
+    if (cultos.length) txt += `${cultos.join(" | ")}\n`;
+    txt += `\n *MÍDIA*\n`;
+    (e.midiaEscala||[]).forEach(me => { const m = membros.find(m=>m.id===me.membroId); if (m) txt += `• ${m.nome}${me.funcao ? " — " + me.funcao : ""}\n`; });
+    txt += `\n_Sistema de Escalas - Monte Sião_`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, "_blank");
+  };
+
+  function formatDateRange(ini, fim) {
+    if (!ini && !fim) return "Sem data";
+    const fmt = d => { const [y,m,day] = d.split("-"); return `${day}/${m}/${y}`; };
+    if (!ini || ini === fim) return fmt(fim || ini);
+    return `${fmt(ini)} – ${fmt(fim)}`;
+  }
+
+  function iCls(size) {
+    const base = "w-full bg-white/10 border border-white/20 rounded-xl px-4 text-white placeholder-white/40 focus:outline-none focus:border-indigo-400";
+    return size === "sm" ? base + " py-2 text-sm" : base + " py-3";
+  }
+
+  function bCls() {
+    return "bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-5 py-2.5 rounded-xl transition text-sm";
+  }
+
+  document.getElementById("appRoot").innerHTML = `
+    <div class="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center">
+      <div class="text-white text-center">
+        <div class="text-5xl mb-4">✝️</div>
+        <p class="text-indigo-300 text-sm">Carregando...</p>
+      </div>
+    </div>`;
+</script>
+</body>
+</html>
