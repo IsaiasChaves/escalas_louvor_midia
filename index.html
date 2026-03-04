@@ -846,7 +846,7 @@
   }
 
   function renderMuForm(mu, muKey, cultoKey, cultos) {
-    const vocaisList = membros.filter(m => m.equipe === "louvor" && m.isVocal);
+    const vocaisList = membros.filter(m => m.equipe === "louvor" && m.isVocal && selectionState.vocaisIds.includes(m.id));
     const outrosCultos = cultos.filter(c => c.key !== cultoKey);
     const linksExist = mu.links || (mu.link ? [mu.link] : [""]);
     const vocaisSel = mu.vocaisPrincipaisIds || (mu.vocalPrincipalId ? [mu.vocalPrincipalId] : []);
