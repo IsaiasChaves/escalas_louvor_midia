@@ -61,6 +61,9 @@
   let editingMembroId = null;
   let selectionState = { vocaisIds: [], midiaIds: [] };
   let lastSavedEscalaId = null;
+  // Estado em memória dos louvores: { [cultoKey]: [{titulo,musicaId,vocaisPrincipaisIds,tom,links,observacoes}] }
+  let escalaEditState = {};
+  let expandedMuKey = null; // "cultoKey_idx" ou "cultoKey_new_TS"
 
   onAuthStateChanged(auth, async (user) => {
     if (user) {
@@ -256,22 +259,44 @@
             return `<p class="text-white text-sm">${m ? m.nome : id}</p>`;
           }).join("") || '<p class="text-white/40 text-sm">-</p>'}
         </div>
-        ${(e.musicas||[]).length ? `
-        <div class="space-y-3">
-          <p class="text-indigo-300 text-xs font-semibold">🎵 Louvores</p>
-          ${(e.musicas||[]).map(mu => {
-            const principal = membros.find(m=>m.id===mu.vocalPrincipalId);
-            const tomKey = `${mu.musicaId || mu.titulo}_${mu.vocalPrincipalId}`;
+        ${(() => {
+          const musicasPorCulto = e.musicasPorCulto || {};
+          const temPorCulto = Object.keys(musicasPorCulto).length > 0;
+          // Monta lista de cultos da escala
+          const cultosEscala = [];
+          if (e.tipoCultoSabado) cultosEscala.push({ key: `sab_${e.tipoCultoSabado}`, label: `Sáb — ${e.tipoCultoSabado}` });
+          (e.tipoCultoDomingo||[]).forEach(c => cultosEscala.push({ key: `dom_${c}`, label: `Dom — ${c}` }));
+
+          const renderMusica = (mu) => {
+            const vocaisPrincipais = (mu.vocaisPrincipaisIds || (mu.vocalPrincipalId ? [mu.vocalPrincipalId] : [])).map(id => membros.find(m=>m.id===id)).filter(Boolean);
+            const tomKey = `${mu.musicaId || mu.titulo}_${(mu.vocaisPrincipaisIds||[])[0] || mu.vocalPrincipalId}`;
             const tom = tomsMap[tomKey] || mu.tom || "";
+            const links = mu.links || (mu.link ? [mu.link] : []);
             return `
             <div class="bg-white/5 border border-white/10 rounded-xl p-3">
               <p class="text-white font-semibold text-sm">${mu.titulo || "Sem título"}</p>
-              ${principal ? `<p class="text-indigo-300 text-xs mt-1">🎤 Principal: ${principal.nome}${tom ? ` · Tom: <span class="text-amber-400 font-bold">${tom}</span>` : ""}</p>` : ""}
-              ${mu.link ? `<a href="${mu.link}" target="_blank" class="text-blue-400 text-xs mt-1 block">🔗 Link</a>` : ""}
-              ${mu.observacoes ? `<p class="text-white/60 text-xs mt-1 italic">📝 ${mu.observacoes}</p>` : ""}
+              ${vocaisPrincipais.length ? `<p class="text-indigo-300 text-xs mt-1">Vocais: ${vocaisPrincipais.map(v=>v.nome).join(", ")}${tom ? ` · Tom: <span class="text-amber-400 font-bold">${tom}</span>` : ""}</p>` : ""}
+              ${links.map(lk => lk ? `<a href="${lk}" target="_blank" class="text-blue-400 text-xs mt-1 block">Link</a>` : "").join("")}
+              ${mu.observacoes ? `<p class="text-white/60 text-xs mt-1 italic">${mu.observacoes}</p>` : ""}
             </div>`;
-          }).join("")}
-        </div>` : ""}
+          };
+
+          if (temPorCulto) {
+            return cultosEscala.map(ct => {
+              const lista = musicasPorCulto[ct.key] || [];
+              if (!lista.length) return "";
+              return `
+              <div class="mb-3">
+                <p class="text-indigo-400 text-xs font-semibold mb-2">${ct.label}</p>
+                <div class="space-y-2">${lista.map(renderMusica).join("")}</div>
+              </div>`;
+            }).join("");
+          } else {
+            const lista = e.musicas || [];
+            if (!lista.length) return "";
+            return `<div class="space-y-2">${lista.map(renderMusica).join("")}</div>`;
+          }
+        })()}
         ${isAdmin ? `
         <div class="mt-3 pt-3 border-t border-white/10">
           <button onclick="gerarWhatsApp('${e.id}')" class="text-xs bg-green-700 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition">📱 WhatsApp Louvor</button>
@@ -572,7 +597,7 @@
             ${cultosSabadoOpts.map(t => {
               const checked = escala?.tipoCultoSabado === t ? "checked" : "";
               return `<label class="flex items-center gap-2 text-white text-xs cursor-pointer">
-                <input type="radio" name="tipoCultoSabado" value="${t}" ${checked} class="w-3.5 h-3.5 accent-indigo-500"> ${t}
+                <input type="checkbox" name="tipoCultoSabado" value="${t}" ${checked} onchange="(function(el){if(el.checked){document.querySelectorAll('input[name=tipoCultoSabado]').forEach(r=>{if(r!==el)r.checked=false;})};})(this)" class="w-3.5 h-3.5 accent-indigo-500"> ${t}
               </label>`;
             }).join("")}
           </div>
@@ -619,17 +644,14 @@
           </div>
 
           <div class="bg-white/10 border border-white/20 rounded-2xl p-5">
-            <div class="flex items-center justify-between mb-3">
-              <h3 class="text-white font-semibold">🎵 Louvores da Escala</h3>
-              <button onclick="addMusicaRow()" class="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg transition">+ Adicionar</button>
-            </div>
-            <div id="musicasEscalaList">
-              ${(escala?.musicas||[]).map((mu, idx) => musicaRow(mu, idx)).join("")}
+            <h3 class="text-white font-semibold mb-4">🎵 Louvores por Culto</h3>
+            <div id="cultosMusicasList" class="space-y-4">
+              ${renderCultosMusicasBlocks(escala)}
             </div>
           </div>
 
-          <button onclick="salvarEscala()" class="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition text-base">
-            💾 Salvar Escala
+          <button onclick="verResumoEscala()" class="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition text-base">
+            Ver Resumo →
           </button>
         </div>
       </div>
@@ -747,34 +769,223 @@
     </div>`;
   }
 
-  function musicaRow(mu, idx) {
-    const vocaisList = membros.filter(m => m.equipe === "louvor" && m.isVocal);
+  // ===================== LOUVORES POR CULTO — estado em memória =====================
+
+  function cultosDeEscala(escala) {
+    const list = [];
+    if (escala?.tipoCultoSabado) list.push({ key: `sab_${escala.tipoCultoSabado}`, label: `Sáb — ${escala.tipoCultoSabado}` });
+    (escala?.tipoCultoDomingo||[]).forEach(c => list.push({ key: `dom_${c}`, label: `Dom — ${c}` }));
+    if (!list.length) list.push({ key: "geral", label: "Louvores" });
+    return list;
+  }
+
+  function initEscalaEditState(escala) {
+    escalaEditState = {};
+    expandedMuKey = null;
+    const cultos = cultosDeEscala(escala);
+    const mpc = escala?.musicasPorCulto || {};
+    const legacy = escala?.musicas || [];
+    cultos.forEach((ct, i) => {
+      escalaEditState[ct.key] = (mpc[ct.key] || (i===0 && !Object.keys(mpc).length ? legacy : [])).map(m => ({...m}));
+    });
+  }
+
+  function getCultosAtuais() {
+    // Lê cultos a partir dos blocos presentes no DOM
+    const list = [];
+    document.querySelectorAll("[id^='cultoBlock_']").forEach(bl => {
+      const k = bl.id.replace("cultoBlock_","");
+      const label = bl.querySelector("[data-culto-label]")?.textContent?.trim() || k;
+      list.push({ key: k, label });
+    });
+    return list;
+  }
+
+  function reRenderLouvores() {
+    const container = document.getElementById("cultosMusicasList");
+    if (!container) return;
+    // Reconstruir cultos a partir do estado (preserva ordem)
+    const cultos = Object.keys(escalaEditState).map(k => {
+      const el = document.querySelector(`[id='cultoBlock_${k}'] [data-culto-label]`);
+      return { key: k, label: el?.textContent?.trim() || k };
+    });
+    container.innerHTML = renderCultosHTML(cultos);
+  }
+
+  function renderCultosHTML(cultos) {
+    return cultos.map(ct => {
+      const lista = escalaEditState[ct.key] || [];
+      const newKey = expandedMuKey && expandedMuKey.startsWith(`${ct.key}_new_`) ? expandedMuKey : null;
+      return `
+      <div class="bg-white/5 border border-white/10 rounded-xl p-3" id="cultoBlock_${ct.key}">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-indigo-300 text-xs font-semibold" data-culto-label>${ct.label}</span>
+          <button onclick="addMusicaRow('${ct.key}')" class="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg transition">+ Adicionar</button>
+        </div>
+        <div class="space-y-1">
+          ${lista.map((mu, idx) => renderMuItem(mu, ct.key, idx, cultos)).join("")}
+          ${newKey ? renderMuForm({}, newKey, ct.key, cultos) : ""}
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  function renderMuItem(mu, cultoKey, idx, cultos) {
+    const muKey = `${cultoKey}_${idx}`;
+    if (expandedMuKey === muKey) return renderMuForm(mu, muKey, cultoKey, cultos);
+    const titulo = mu.titulo || musicas.find(m=>m.id===mu.musicaId)?.titulo || "Sem título";
+    const vocaisNomes = (mu.vocaisPrincipaisIds||[]).map(id=>membros.find(m=>m.id===id)?.nome).filter(Boolean).join(", ");
     return `
-    <div class="bg-white/5 border border-white/10 rounded-xl p-3 mb-3" id="muRow_${idx}">
+    <div class="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-2 cursor-pointer hover:bg-white/10 transition group" onclick="expandirMu('${muKey}')">
+      <div class="flex-1 min-w-0">
+        <p class="text-white text-sm font-medium truncate">${titulo}</p>
+        ${vocaisNomes ? `<p class="text-indigo-300 text-xs truncate">${vocaisNomes}${mu.tom?" · "+mu.tom:""}</p>` : ""}
+      </div>
+      <span class="text-white/30 text-xs group-hover:text-white/60 transition flex-shrink-0">✏️</span>
+    </div>`;
+  }
+
+  function renderMuForm(mu, muKey, cultoKey, cultos) {
+    const vocaisList = membros.filter(m => m.equipe === "louvor" && m.isVocal);
+    const outrosCultos = cultos.filter(c => c.key !== cultoKey);
+    const linksExist = mu.links || (mu.link ? [mu.link] : [""]);
+    const vocaisSel = mu.vocaisPrincipaisIds || (mu.vocalPrincipalId ? [mu.vocalPrincipalId] : []);
+    const isNew = muKey.includes("_new_");
+    return `
+    <div class="bg-indigo-950/60 border border-indigo-500/30 rounded-xl p-3" id="muForm_${muKey}">
       <div class="grid grid-cols-1 gap-2">
-        <select id="mu_musica_${idx}" class="${iCls('sm')}">
+        <select id="mu_musica_${muKey}" onchange="onMusicaSel('${muKey}')" class="${iCls('sm')}">
           <option value="">Selecione louvor cadastrado</option>
-          ${musicas.map(m => `<option value="${m.id}" ${mu.musicaId===m.id?"selected":""}>${m.titulo}</option>`).join("")}
+          ${musicas.map(m=>`<option value="${m.id}" ${mu.musicaId===m.id?"selected":""}>${m.titulo}</option>`).join("")}
           <option value="__novo__">+ Digitar título manualmente</option>
         </select>
-        <input id="mu_titulo_${idx}" placeholder="Título do louvor" value="${mu.titulo||""}" class="${iCls('sm')}" />
-        <select id="mu_vocal_${idx}" class="${iCls('sm')}">
-          <option value="">Vocal Principal</option>
-          ${vocaisList.map(v => `<option value="${v.id}" ${mu.vocalPrincipalId===v.id?"selected":""}>${v.nome}</option>`).join("")}
-        </select>
-        <input id="mu_tom_${idx}" placeholder="Tom (Ex: D, G, Am, F#m)" value="${mu.tom||""}" class="${iCls('sm')}" />
-        <input id="mu_link_${idx}" placeholder="Link (YouTube, Google Drive...)" value="${mu.link||""}" class="${iCls('sm')}" />
-        <input id="mu_obs_${idx}" placeholder="Observações (opcional)" value="${mu.observacoes||""}" class="${iCls('sm')}" />
-        <button onclick="document.getElementById('muRow_${idx}').remove()" class="text-red-400 hover:text-red-300 text-xs self-start transition">🗑️ Remover</button>
+        <input id="mu_titulo_${muKey}" placeholder="Título do louvor" value="${mu.titulo||""}" class="${iCls('sm')}" />
+        <div>
+          <p class="text-white/50 text-xs mb-1 px-1">Vocais Principais</p>
+          <div class="flex flex-wrap gap-2 bg-white/5 rounded-xl p-2">
+            ${vocaisList.map(v=>`
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" name="mu_vocais_${muKey}" value="${v.id}" ${vocaisSel.includes(v.id)?"checked":""} class="w-3.5 h-3.5 accent-indigo-500">
+                <span class="text-white text-xs">${v.nome}</span>
+              </label>`).join("")}
+          </div>
+        </div>
+        <input id="mu_tom_${muKey}" placeholder="Tom (Ex: D, G, Am, F#m)" value="${mu.tom||""}" class="${iCls('sm')}" />
+        <div id="mu_links_${muKey}">
+          ${linksExist.map((lk,li)=>`
+            <div class="flex gap-1 mb-1" id="linkRow_${muKey}_${li}">
+              <input id="mu_link_${muKey}_${li}" placeholder="Link (YouTube, Google Drive...)" value="${lk||""}" class="${iCls('sm')}" style="flex:1" />
+              ${li>0?`<button onclick="document.getElementById('linkRow_${muKey}_${li}').remove()" class="text-red-400 hover:text-red-300 text-xs px-2">✕</button>`:""}
+            </div>`).join("")}
+        </div>
+        <button onclick="addLinkRow('${muKey}')" class="text-indigo-400 hover:text-indigo-300 text-xs self-start transition">+ Adicionar link</button>
+        <input id="mu_obs_${muKey}" placeholder="Observações (opcional)" value="${mu.observacoes||""}" class="${iCls('sm')}" />
+        <div class="flex items-center gap-2 flex-wrap pt-2 border-t border-white/10">
+          <button onclick="confirmarMu('${muKey}','${cultoKey}')" class="text-xs bg-green-700 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition font-semibold">
+            ${isNew ? "Adicionar ✓" : "Salvar ✓"}
+          </button>
+          ${!isNew ? `<button onclick="removerMu('${muKey}','${cultoKey}')" class="text-red-400 hover:text-red-300 text-xs transition">🗑️ Remover</button>` : ""}
+          ${outrosCultos.length ? `
+            <span class="text-white/20 text-xs">|</span>
+            <span class="text-white/40 text-xs">Importar para:</span>
+            ${outrosCultos.map(oc=>`<button onclick="importarMu('${muKey}','${oc.key}')" class="text-xs bg-white/10 hover:bg-white/20 text-white/70 px-2 py-1 rounded-lg transition">${oc.label}</button>`).join("")}` : ""}
+          <button onclick="cancelarMu()" class="text-white/30 hover:text-white/60 text-xs ml-auto transition">Cancelar</button>
+        </div>
       </div>
     </div>`;
   }
 
-  window.addMusicaRow = () => {
-    const list = document.getElementById("musicasEscalaList");
-    const idx = Date.now();
-    list.insertAdjacentHTML("beforeend", musicaRow({}, idx));
+  function coletarForm(muKey) {
+    const form = document.getElementById(`muForm_${muKey}`);
+    if (!form) return null;
+    const musicaId = document.getElementById(`mu_musica_${muKey}`)?.value || "";
+    const titulo = document.getElementById(`mu_titulo_${muKey}`)?.value || "";
+    const vocaisPrincipaisIds = [...form.querySelectorAll(`input[name='mu_vocais_${muKey}']:checked`)].map(cb=>cb.value);
+    const tom = document.getElementById(`mu_tom_${muKey}`)?.value || "";
+    const links = [...form.querySelectorAll(`[id^='mu_link_${muKey}_']`)].map(el=>el.value.trim()).filter(Boolean);
+    const observacoes = document.getElementById(`mu_obs_${muKey}`)?.value || "";
+    return { musicaId: musicaId!=="__novo__"?musicaId:"", titulo, vocaisPrincipaisIds, vocalPrincipalId: vocaisPrincipaisIds[0]||"", tom, links, link: links[0]||"", observacoes };
+  }
+
+  window.onMusicaSel = (muKey) => {
+    const sel = document.getElementById(`mu_musica_${muKey}`);
+    const inp = document.getElementById(`mu_titulo_${muKey}`);
+    if (sel && inp && sel.value && sel.value !== "__novo__") {
+      const m = musicas.find(m=>m.id===sel.value);
+      if (m) inp.value = m.titulo;
+    }
   };
+
+  window.expandirMu = (muKey) => {
+    expandedMuKey = muKey;
+    reRenderLouvores();
+    setTimeout(()=>{ document.getElementById(`muForm_${muKey}`)?.scrollIntoView({behavior:"smooth",block:"nearest"}); }, 50);
+  };
+
+  window.cancelarMu = () => { expandedMuKey = null; reRenderLouvores(); };
+
+  window.confirmarMu = (muKey, cultoKey) => {
+    const dados = coletarForm(muKey);
+    if (!dados || (!dados.titulo && !dados.musicaId)) return alert("Informe o título do louvor.");
+    if (!escalaEditState[cultoKey]) escalaEditState[cultoKey] = [];
+    if (muKey.includes("_new_")) {
+      escalaEditState[cultoKey].push(dados);
+    } else {
+      const idx = parseInt(muKey.split("_").pop());
+      escalaEditState[cultoKey][idx] = dados;
+    }
+    expandedMuKey = null;
+    reRenderLouvores();
+  };
+
+  window.removerMu = (muKey, cultoKey) => {
+    if (!confirm("Remover este louvor?")) return;
+    const idx = parseInt(muKey.split("_").pop());
+    escalaEditState[cultoKey]?.splice(idx, 1);
+    expandedMuKey = null;
+    reRenderLouvores();
+  };
+
+  window.addMusicaRow = (cultoKey) => {
+    if (!escalaEditState[cultoKey]) escalaEditState[cultoKey] = [];
+    expandedMuKey = `${cultoKey}_new_${Date.now()}`;
+    reRenderLouvores();
+    setTimeout(()=>{ document.getElementById(`muForm_${expandedMuKey}`)?.scrollIntoView({behavior:"smooth",block:"nearest"}); }, 50);
+  };
+
+  window.importarMu = (muKey, destKey) => {
+    const dados = coletarForm(muKey);
+    if (!dados || (!dados.titulo && !dados.musicaId)) return alert("Preencha o louvor antes de importar.");
+    if (!escalaEditState[destKey]) escalaEditState[destKey] = [];
+    escalaEditState[destKey].push({...dados});
+    // Também salva o item atual
+    const cultoKey = muKey.replace(/_new_\d+$/,"").replace(/_\d+$/,"");
+    if (!muKey.includes("_new_")) {
+      const idx = parseInt(muKey.split("_").pop());
+      if (escalaEditState[cultoKey]) escalaEditState[cultoKey][idx] = dados;
+    }
+    expandedMuKey = null;
+    reRenderLouvores();
+  };
+
+  window.addLinkRow = (muKey) => {
+    const container = document.getElementById(`mu_links_${muKey}`);
+    if (!container) return;
+    const li = Date.now();
+    container.insertAdjacentHTML("beforeend", `
+      <div class="flex gap-1 mb-1" id="linkRow_${muKey}_${li}">
+        <input id="mu_link_${muKey}_${li}" placeholder="Link (YouTube, Google Drive...)" value="" class="${iCls('sm')}" style="flex:1" />
+        <button onclick="document.getElementById('linkRow_${muKey}_${li}').remove()" class="text-red-400 hover:text-red-300 text-xs px-2">✕</button>
+      </div>`);
+  };
+
+  function renderCultosMusicasBlocks(escala) {
+    initEscalaEditState(escala);
+    return renderCultosHTML(cultosDeEscala(escala));
+  }
+
+  // mantido por compatibilidade
+  function coletarDadosMusicaRow(idx) { return {}; }
 
   // ===================== SUGESTÃO MÚSICOS =====================
   function calcularSugestao() {
@@ -1292,26 +1503,78 @@
     return { dataInicio, dataFim, tipoCultoSabado, tipoCultoDomingo };
   }
 
+  window.verResumoEscala = () => {
+    const { dataInicio, dataFim, tipoCultoSabado, tipoCultoDomingo } = getDateCultoData();
+    if (!dataFim) return alert("Informe a data do Domingo (obrigatório).");
+
+    // Montar cultos a partir do estado
+    const cultos = Object.keys(escalaEditState).map(k => {
+      const el = document.querySelector(`[id='cultoBlock_${k}'] [data-culto-label]`);
+      return { key: k, label: el?.textContent?.trim() || k };
+    });
+
+    const vocaisNomes = (selectionState.vocaisIds||[]).map(id=>membros.find(m=>m.id===id)?.nome).filter(Boolean);
+
+    const resumoCultos = cultos.map(ct => {
+      const lista = escalaEditState[ct.key] || [];
+      if (!lista.length) return "";
+      return `
+      <div class="mb-3">
+        <p class="text-indigo-300 text-xs font-semibold mb-1">${ct.label}</p>
+        ${lista.map(mu => {
+          const titulo = mu.titulo || musicas.find(m=>m.id===mu.musicaId)?.titulo || "Sem título";
+          const vocs = (mu.vocaisPrincipaisIds||[]).map(id=>membros.find(m=>m.id===id)?.nome).filter(Boolean).join(", ");
+          return `<div class="bg-white/5 rounded-lg px-3 py-1.5 mb-1">
+            <p class="text-white text-sm">${titulo}${mu.tom?` <span class="text-amber-400 text-xs">· ${mu.tom}</span>`:""}</p>
+            ${vocs?`<p class="text-white/50 text-xs">${vocs}</p>`:""}
+          </div>`;
+        }).join("")}
+      </div>`;
+    }).join("");
+
+    const modal = document.createElement("div");
+    modal.id = "resumoModal";
+    modal.className = "fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4";
+    modal.innerHTML = `
+      <div class="bg-slate-800 border border-white/20 rounded-2xl p-6 w-full max-w-md shadow-2xl max-h-[85vh] overflow-y-auto">
+        <h3 class="text-white font-bold text-lg mb-1">Resumo da Escala</h3>
+        <p class="text-white/40 text-xs mb-4">${formatDateRange(dataInicio||dataFim, dataFim)}</p>
+        ${vocaisNomes.length ? `
+        <div class="mb-4">
+          <p class="text-indigo-300 text-xs font-semibold mb-1">Vocais</p>
+          <p class="text-white text-sm">${vocaisNomes.join(", ")}</p>
+        </div>` : ""}
+        <div class="mb-5">${resumoCultos || '<p class="text-white/40 text-sm">Nenhum louvor adicionado.</p>'}</div>
+        <div class="space-y-2">
+          <button onclick="fecharResumo(); salvarEscala();" class="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-2.5 rounded-xl transition text-sm">
+            💾 Confirmar e Salvar
+          </button>
+          <button onclick="fecharResumo()" class="w-full bg-white/10 hover:bg-white/20 text-white py-2.5 rounded-xl text-sm transition">
+            Voltar e editar
+          </button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  };
+
+  window.fecharResumo = () => { document.getElementById("resumoModal")?.remove(); };
+
   window.salvarEscala = async () => {
     const { dataInicio, dataFim, tipoCultoSabado, tipoCultoDomingo } = getDateCultoData();
     if (!dataFim) return alert("Informe a data do Domingo (obrigatório).");
 
-    const musicasEscala = [];
-    document.querySelectorAll("[id^='muRow_']").forEach(row => {
-      const idx = row.id.replace("muRow_", "");
-      const musicaId = document.getElementById(`mu_musica_${idx}`)?.value || "";
-      const titulo = document.getElementById(`mu_titulo_${idx}`)?.value || "";
-      const vocalPrincipalId = document.getElementById(`mu_vocal_${idx}`)?.value || "";
-      const tom = document.getElementById(`mu_tom_${idx}`)?.value || "";
-      const link = document.getElementById(`mu_link_${idx}`)?.value || "";
-      const observacoes = document.getElementById(`mu_obs_${idx}`)?.value || "";
-      musicasEscala.push({ musicaId: musicaId !== "__novo__" ? musicaId : "", titulo, vocalPrincipalId, tom, link, observacoes });
+    const musicasPorCulto = {};
+    Object.entries(escalaEditState).forEach(([k, lista]) => {
+      musicasPorCulto[k] = lista.filter(mu => mu.titulo || mu.musicaId);
     });
+    const musicasEscala = Object.values(musicasPorCulto).flat();
 
     for (const mu of musicasEscala) {
-      if (mu.vocalPrincipalId && mu.tom && (mu.musicaId || mu.titulo)) {
-        const key = `${mu.musicaId || mu.titulo}_${mu.vocalPrincipalId}`;
-        await setDoc(doc(db, "toms", key), { tom: mu.tom, musicaId: mu.musicaId, titulo: mu.titulo, vocalPrincipalId: mu.vocalPrincipalId });
+      if (mu.tom && (mu.musicaId || mu.titulo)) {
+        for (const vId of (mu.vocaisPrincipaisIds || (mu.vocalPrincipalId ? [mu.vocalPrincipalId] : []))) {
+          const key = `${mu.musicaId || mu.titulo}_${vId}`;
+          await setDoc(doc(db, "toms", key), { tom: mu.tom, musicaId: mu.musicaId, titulo: mu.titulo, vocalPrincipalId: vId });
+        }
       }
     }
 
@@ -1322,6 +1585,7 @@
       tipoCultoDomingo,
       vocaisIds: selectionState.vocaisIds,
       musicas: musicasEscala,
+      musicasPorCulto,
       updatedAt: new Date().toISOString(),
       updatedBy: currentUser?.uid || "",
     };
@@ -1425,7 +1689,7 @@
   window.aceitarSugestao = () => {
     const { sugestao } = calcularSugestao();
     const musicosEscala = instrumentos.filter(i => sugestao[i]).map(i => ({ membroId: sugestao[i].membro.id, instrumento: i }));
-    let txt = `*ESCALA DE MÚSICOS - MONTE SIÃO*\n\n *MÚSICOS*\n`;
+    let txt = `*ESCALA DE MÚSICOS - MONTE SIÃO*\n\n*MÚSICOS*\n`;
     musicosEscala.forEach(me => { const m = membros.find(m => m.id === me.membroId); if (m) txt += `• ${m.nome} — ${me.instrumento}\n`; });
     txt += `\n_Sugestão gerada pelo sistema Monte Sião_`;
     window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, "_blank");
@@ -1450,7 +1714,7 @@
 
   window.aceitarSugestaoMidia = () => {
     const { sugestao } = calcularSugestaoMidia();
-    let txt = `*SUGESTÃO EQUIPE DE MÍDIA - MONTE SIÃO*\n\n *MÍDIA*\n`;
+    let txt = `*SUGESTÃO EQUIPE DE MIDIA - MONTE SIÃO*\n\n*MIDIA*\n`;
     funcoesM.forEach(f => { const s = sugestao[f]; if (s) txt += `• ${s.membro.nome} — ${f}\n`; });
     txt += `\n_Sugestão gerada pelo sistema Monte Sião_`;
     window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, "_blank");
@@ -1462,22 +1726,42 @@
     let txt = `*ESCALA DE LOUVOR - MONTE SIÃO*\n*${formatDateRange(e.dataInicio, e.dataFim)}*\n`;
     const cultos = [e.tipoCultoSabado ? `Sáb: ${e.tipoCultoSabado}` : null, ...(e.tipoCultoDomingo||[]).map(c => `Dom: ${c}`)].filter(Boolean);
     if (cultos.length) txt += `${cultos.join(" | ")}\n`;
-    txt += `\n *VOCAIS*\n`;
+    txt += `\n*VOCAIS*\n`;
     (e.vocaisIds||[]).forEach(id => { const m = membros.find(m=>m.id===id); if (m) txt += `• ${m.nome}\n`; });
-    if ((e.musicas||[]).length) {
-      txt += `\n *LOUVORES*\n`;
-      e.musicas.forEach(mu => {
-        txt += `\n *${mu.titulo || "Louvor"}*\n`;
-        if (mu.vocalPrincipalId) {
-          const vp = membros.find(m=>m.id===mu.vocalPrincipalId);
-          if (vp) txt += `  🎤 Principal: ${vp.nome}`;
-          if (mu.tom) txt += ` | Tom: ${mu.tom}`;
-          txt += "\n";
-        }
-        if (mu.link) txt += `  🔗 ${mu.link}\n`;
-        if (mu.observacoes) txt += `   ${mu.observacoes}\n`;
+
+    const musicasPorCulto = e.musicasPorCulto || {};
+    const temPorCulto = Object.keys(musicasPorCulto).length > 0;
+
+    const cultosEscala = [];
+    if (e.tipoCultoSabado) cultosEscala.push({ key: `sab_${e.tipoCultoSabado}`, label: `Sáb — ${e.tipoCultoSabado}` });
+    (e.tipoCultoDomingo||[]).forEach(c => cultosEscala.push({ key: `dom_${c}`, label: `Dom — ${c}` }));
+
+    const renderMusicaTxt = (mu) => {
+      let t = `\n  *${mu.titulo || "Louvor"}*\n`;
+      const vocaisPrincipais = (mu.vocaisPrincipaisIds || (mu.vocalPrincipalId ? [mu.vocalPrincipalId] : [])).map(id => membros.find(m=>m.id===id)).filter(Boolean);
+      if (vocaisPrincipais.length) {
+        t += `  ${vocaisPrincipais.map(v=>v.nome).join(", ")}`;
+        if (mu.tom) t += ` | Tom: ${mu.tom}`;
+        t += "\n";
+      }
+      const links = mu.links || (mu.link ? [mu.link] : []);
+      links.forEach(lk => { if (lk) t += `  ${lk}\n`; });
+      if (mu.observacoes) t += `  ${mu.observacoes}\n`;
+      return t;
+    };
+
+    if (temPorCulto) {
+      cultosEscala.forEach(ct => {
+        const lista = musicasPorCulto[ct.key] || [];
+        if (!lista.length) return;
+        txt += `\n*LOUVORES — ${ct.label.toUpperCase()}*`;
+        lista.forEach(mu => { txt += renderMusicaTxt(mu); });
       });
+    } else if ((e.musicas||[]).length) {
+      txt += `\n*LOUVORES*`;
+      (e.musicas||[]).forEach(mu => { txt += renderMusicaTxt(mu); });
     }
+
     txt += `\n_Sistema de Escalas - Monte Sião_`;
     window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, "_blank");
   };
@@ -1497,10 +1781,10 @@
   window.gerarWhatsAppMidia = (escalaId) => {
     const e = escalasMidia.find(es => es.id === escalaId);
     if (!e) return;
-    let txt = `*EQUIPE DE MÍDIA - MONTE SIÃO*\n*${formatDateRange(e.dataInicio, e.dataFim)}*\n`;
+    let txt = `*EQUIPE DE MIDIA - MONTE SIÃO*\n*${formatDateRange(e.dataInicio, e.dataFim)}*\n`;
     const cultos = [e.tipoCultoSabado ? `Sáb: ${e.tipoCultoSabado}` : null, ...(e.tipoCultoDomingo||[]).map(c => `Dom: ${c}`)].filter(Boolean);
     if (cultos.length) txt += `${cultos.join(" | ")}\n`;
-    txt += `\n *MÍDIA*\n`;
+    txt += `\n*MIDIA*\n`;
     (e.midiaEscala||[]).forEach(me => { const m = membros.find(m=>m.id===me.membroId); if (m) txt += `• ${m.nome}${me.funcao ? " — " + me.funcao : ""}\n`; });
     txt += `\n_Sistema de Escalas - Monte Sião_`;
     window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, "_blank");
